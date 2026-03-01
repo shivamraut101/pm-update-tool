@@ -41,7 +41,7 @@ async def sync_from_reference_db():
             # Add extra known aliases for specific users
             email = user.get("email", "")
             if email == "aman@primexmeta.com":
-                aliases.extend(["aman", "aman sharma"])
+                aliases.extend(["aman", "aman sharma", "aman singh", "aman kumar singh"])
 
             doc = {
                 "name": name,
