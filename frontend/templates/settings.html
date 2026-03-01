@@ -71,17 +71,16 @@
 
         <!-- WhatsApp Settings -->
         <div class="bg-white rounded-lg shadow p-5">
-            <h2 class="text-lg font-semibold text-gray-700 mb-4">WhatsApp (Twilio)</h2>
+            <h2 class="text-lg font-semibold text-gray-700 mb-4">WhatsApp (Web Bridge)</h2>
             <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
-                    <label class="block text-sm text-gray-600 mb-1">Twilio Account SID</label>
-                    <input type="text" value="{{ '***' + settings.twilio_account_sid[-4:] if settings.twilio_account_sid else 'Not configured' }}"
+                    <label class="block text-sm text-gray-600 mb-1">Bridge URL</label>
+                    <input type="text" value="{{ settings.whatsapp_bridge_url or 'Not configured' }}"
                            class="w-full border rounded px-3 py-2 bg-gray-50" disabled>
                 </div>
                 <div>
-                    <label class="block text-sm text-gray-600 mb-1">WhatsApp From Number</label>
-                    <input type="text" value="{{ settings.twilio_whatsapp_from or 'Not configured' }}"
-                           class="w-full border rounded px-3 py-2 bg-gray-50" disabled>
+                    <label class="block text-sm text-gray-600 mb-1">Bridge Status</label>
+                    <span id="wa-bridge-status" class="inline-block px-3 py-2 text-sm text-gray-400">Checking...</span>
                 </div>
                 <div>
                     <label class="block text-sm text-gray-600 mb-1">Your WhatsApp</label>
@@ -96,9 +95,38 @@
             </div>
             <div class="mt-3">
                 <button onclick="testWhatsApp()" class="bg-green-600 text-white px-4 py-2 rounded text-sm hover:bg-green-700">
-                    Send Test WhatsApp
+                    Check Bridge Connection
                 </button>
                 <span id="whatsapp-test-status" class="ml-2 text-sm"></span>
+            </div>
+        </div>
+
+        <!-- Telegram Settings -->
+        <div class="bg-white rounded-lg shadow p-5">
+            <h2 class="text-lg font-semibold text-gray-700 mb-4">Telegram Bot</h2>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                    <label class="block text-sm text-gray-600 mb-1">Bot Token</label>
+                    <input type="text" value="{{ '***' + settings.telegram_bot_token[-6:] if settings.telegram_bot_token else 'Not configured' }}"
+                           class="w-full border rounded px-3 py-2 bg-gray-50" disabled>
+                </div>
+                <div>
+                    <label class="block text-sm text-gray-600 mb-1">Chat ID</label>
+                    <input type="text" value="{{ settings.telegram_chat_id or 'Not configured' }}"
+                           class="w-full border rounded px-3 py-2 bg-gray-50" disabled>
+                </div>
+                <div>
+                    <label class="block text-sm text-gray-600 mb-1">Mode</label>
+                    <input type="text" value="{{ 'Webhook' if settings.app_url else 'Long Polling' }}"
+                           class="w-full border rounded px-3 py-2 bg-gray-50" disabled>
+                </div>
+                {% if settings.app_url %}
+                <div>
+                    <label class="block text-sm text-gray-600 mb-1">Webhook URL</label>
+                    <input type="text" value="{{ settings.app_url }}/api/telegram/webhook"
+                           class="w-full border rounded px-3 py-2 bg-gray-50" disabled>
+                </div>
+                {% endif %}
             </div>
         </div>
 
@@ -110,7 +138,7 @@
                 <input type="text" value="{{ '***' + settings.gemini_api_key[-4:] if settings.gemini_api_key else 'Not configured' }}"
                        class="w-full border rounded px-3 py-2 bg-gray-50" disabled>
             </div>
-            <p class="text-xs text-gray-400 mt-2">Using gemini-2.0-flash model. Free tier: 15 RPM, 1500 RPD.</p>
+            <p class="text-xs text-gray-400 mt-2">Paid tier. Models: gemini-2.5-flash, gemini-2.5-pro, gemini-2.0-flash.</p>
         </div>
     </div>
 </div>
@@ -120,17 +148,54 @@ async function testEmail() {
     const status = document.getElementById('email-test-status');
     status.textContent = 'Sending...';
     status.className = 'ml-2 text-sm text-blue-600';
-    // For now, just show a message. Full test endpoint can be added later.
     status.textContent = 'Configure SMTP in .env file first, then restart.';
     status.className = 'ml-2 text-sm text-gray-500';
 }
 
 async function testWhatsApp() {
     const status = document.getElementById('whatsapp-test-status');
-    status.textContent = 'Sending...';
+    status.textContent = 'Checking...';
     status.className = 'ml-2 text-sm text-blue-600';
-    status.textContent = 'Configure Twilio in .env file first, then restart.';
-    status.className = 'ml-2 text-sm text-gray-500';
+    try {
+        const resp = await fetch('/api/whatsapp/status');
+        const data = await resp.json();
+        if (data.status === 'ready') {
+            status.textContent = 'Connected!';
+            status.className = 'ml-2 text-sm text-green-600 font-medium';
+        } else if (data.qr_pending) {
+            status.textContent = 'QR scan needed';
+            status.className = 'ml-2 text-sm text-yellow-600';
+        } else {
+            status.textContent = data.status || 'Disconnected';
+            status.className = 'ml-2 text-sm text-red-600';
+        }
+    } catch(e) {
+        status.textContent = 'Bridge unreachable';
+        status.className = 'ml-2 text-sm text-red-500';
+    }
 }
+
+// Auto-check bridge status on load
+document.addEventListener('DOMContentLoaded', async function() {
+    try {
+        const resp = await fetch('/api/whatsapp/status');
+        const data = await resp.json();
+        const el = document.getElementById('wa-bridge-status');
+        if (data.status === 'ready') {
+            el.textContent = 'Connected';
+            el.className = 'inline-block px-3 py-2 text-sm text-green-600 font-medium';
+        } else if (data.qr_pending) {
+            el.textContent = 'QR scan needed';
+            el.className = 'inline-block px-3 py-2 text-sm text-yellow-600';
+        } else {
+            el.textContent = data.status || 'Disconnected';
+            el.className = 'inline-block px-3 py-2 text-sm text-red-500';
+        }
+    } catch(e) {
+        const el = document.getElementById('wa-bridge-status');
+        el.textContent = 'Unreachable';
+        el.className = 'inline-block px-3 py-2 text-sm text-red-500';
+    }
+});
 </script>
 {% endblock %}

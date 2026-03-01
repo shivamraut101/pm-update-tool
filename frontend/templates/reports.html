@@ -19,47 +19,88 @@
         </div>
     </div>
 
-    <div id="generate-status" class="hidden bg-blue-50 border border-blue-200 text-blue-700 rounded-lg p-3 mb-4"></div>
+    <div id="generate-status" class="hidden rounded-lg p-3 mb-4"></div>
 
     <!-- Reports List -->
     <div class="space-y-4">
         {% for r in reports %}
+        {% set delivery = r.get('delivery_status') or {} %}
+        {% set email_status = delivery.get('email') or {} %}
+        {% set whatsapp_status = delivery.get('whatsapp') or {} %}
+        {% set stats = r.get('stats') or {} %}
         <div class="bg-white rounded-lg shadow p-5">
-            <div class="flex justify-between items-start">
-                <div class="flex items-center space-x-3">
+            <div class="flex flex-col sm:flex-row justify-between items-start gap-3">
+                <div class="flex flex-wrap items-center gap-2">
                     <span class="px-3 py-1 rounded-full text-sm font-medium
-                        {% if r.type == 'daily' %}bg-blue-100 text-blue-700{% else %}bg-purple-100 text-purple-700{% endif %}">
-                        {{ r.type | capitalize }}
+                        {% if r.get('type') == 'daily' %}bg-blue-100 text-blue-700{% else %}bg-purple-100 text-purple-700{% endif %}">
+                        {{ r.get('type', 'report') | capitalize }}
                     </span>
-                    <span class="font-medium text-gray-800">{{ r.date }}</span>
-                    {% if r.type == 'weekly' and r.week_start %}
+                    <span class="font-medium text-gray-800">{{ r.get('date', 'N/A') }}</span>
+                    {% if r.get('type') == 'weekly' and r.get('week_start') %}
                     <span class="text-sm text-gray-500">({{ r.week_start }} to {{ r.week_end }})</span>
                     {% endif %}
                 </div>
-                <div class="flex items-center space-x-3">
-                    <span class="text-sm">
-                        Email:
-                        {% if r.delivery_status.email.sent %}
-                        <span class="text-green-600 font-medium">Sent</span>
-                        {% else %}
-                        <span class="text-gray-400">Pending</span>
-                        {% endif %}
+                <div class="flex flex-wrap items-center gap-3">
+                    <span class="inline-flex items-center gap-1 text-xs px-2 py-1 rounded-full border
+                        {% if email_status.get('sent') %}bg-green-50 text-green-700 border-green-200
+                        {% else %}bg-gray-50 text-gray-400 border-gray-200{% endif %}">
+                        Email: {% if email_status.get('sent') %}Sent{% else %}Pending{% endif %}
                     </span>
-                    <span class="text-sm">
-                        WhatsApp:
-                        {% if r.delivery_status.whatsapp.sent %}
-                        <span class="text-green-600 font-medium">Sent</span>
-                        {% else %}
-                        <span class="text-gray-400">Pending</span>
-                        {% endif %}
+                    <span class="inline-flex items-center gap-1 text-xs px-2 py-1 rounded-full border
+                        {% if whatsapp_status.get('sent') %}bg-green-50 text-green-700 border-green-200
+                        {% else %}bg-gray-50 text-gray-400 border-gray-200{% endif %}">
+                        WA: {% if whatsapp_status.get('sent') %}Sent{% else %}Pending{% endif %}
                     </span>
-                    <button onclick="resendReport('{{ r._id }}')" class="text-indigo-600 hover:text-indigo-800 text-sm">Re-send</button>
-                    <button onclick="toggleReport('{{ r._id }}')" class="text-gray-600 hover:text-gray-800 text-sm">View</button>
+                    <button onclick="resendReport('{{ r._id }}')"
+                            class="text-indigo-600 hover:text-indigo-800 text-sm font-medium hover:underline">
+                        Re-send
+                    </button>
+                    <button onclick="toggleReport('{{ r._id }}')"
+                            class="text-gray-600 hover:text-gray-800 text-sm font-medium hover:underline"
+                            id="toggle-btn-{{ r._id }}">
+                        View
+                    </button>
                 </div>
             </div>
+
+            <!-- Stats row -->
+            {% if stats %}
+            <div class="flex flex-wrap gap-3 mt-3 text-xs text-gray-500">
+                {% if stats.get('update_count') %}
+                <span>{{ stats.update_count }} update(s)</span>
+                {% endif %}
+                {% if stats.get('project_count') %}
+                <span>{{ stats.project_count }} project(s)</span>
+                {% endif %}
+                {% if stats.get('blocker_count') %}
+                <span class="text-red-500">{{ stats.blocker_count }} blocker(s)</span>
+                {% endif %}
+                {% if stats.get('action_item_count') %}
+                <span class="text-amber-600">{{ stats.action_item_count }} action item(s)</span>
+                {% endif %}
+                {% if stats.get('days_with_reports') %}
+                <span>{{ stats.days_with_reports }}/5 days reported</span>
+                {% endif %}
+            </div>
+            {% endif %}
+
+            <!-- Executive summary preview -->
+            {% if r.get('executive_summary') %}
+            <p class="mt-3 text-sm text-gray-600 italic border-l-2 border-indigo-300 pl-3">
+                {{ r.executive_summary[:200] }}{% if r.executive_summary|length > 200 %}...{% endif %}
+            </p>
+            {% endif %}
+
+            <!-- Expandable report content -->
             <div id="report-content-{{ r._id }}" class="hidden mt-4 border-t pt-4">
                 <div class="prose max-w-none text-sm">
-                    {{ r.content_html | safe }}
+                    {% if r.get('content_html') %}
+                        {{ r.content_html | safe }}
+                    {% elif r.get('content_markdown') %}
+                        <pre class="whitespace-pre-wrap text-sm text-gray-700">{{ r.content_markdown }}</pre>
+                    {% else %}
+                        <p class="text-gray-400">No content available.</p>
+                    {% endif %}
                 </div>
             </div>
         </div>
@@ -67,8 +108,13 @@
     </div>
 
     {% if not reports %}
-    <div class="bg-white rounded-lg shadow p-8 text-center text-gray-400">
-        No reports generated yet. Submit some updates first, then generate a daily brief.
+    <div class="bg-white rounded-lg shadow p-8 text-center">
+        <svg class="w-16 h-16 mx-auto text-gray-300 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"
+                  d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+        </svg>
+        <p class="text-gray-500 text-lg font-medium mb-2">No reports generated yet</p>
+        <p class="text-gray-400 text-sm">Submit some updates first, then generate a daily brief.</p>
     </div>
     {% endif %}
 </div>
@@ -76,21 +122,26 @@
 <script>
 async function generateReport(type) {
     const statusEl = document.getElementById('generate-status');
-    statusEl.classList.remove('hidden');
+    statusEl.className = 'bg-blue-50 border border-blue-200 text-blue-700 rounded-lg p-3 mb-4';
     statusEl.textContent = 'Generating ' + type + ' report...';
 
     try {
         const resp = await fetch('/api/reports/generate/' + type, { method: 'POST' });
         const data = await resp.json();
-        if (data._id || data.message) {
-            statusEl.textContent = data.message || (type + ' report generated successfully!');
+
+        if (resp.ok && (data._id || data.content_html)) {
+            statusEl.className = 'bg-green-50 border border-green-200 text-green-700 rounded-lg p-3 mb-4';
+            statusEl.textContent = type.charAt(0).toUpperCase() + type.slice(1) + ' report generated successfully!';
             setTimeout(() => window.location.reload(), 1500);
+        } else if (data.message) {
+            statusEl.className = 'bg-yellow-50 border border-yellow-200 text-yellow-700 rounded-lg p-3 mb-4';
+            statusEl.textContent = data.message;
+        } else {
+            throw new Error('Unexpected response');
         }
     } catch(e) {
-        statusEl.textContent = 'Error: ' + e.message;
-        statusEl.classList.replace('bg-blue-50', 'bg-red-50');
-        statusEl.classList.replace('border-blue-200', 'border-red-200');
-        statusEl.classList.replace('text-blue-700', 'text-red-700');
+        statusEl.className = 'bg-red-50 border border-red-200 text-red-700 rounded-lg p-3 mb-4';
+        statusEl.textContent = 'Error generating report: ' + e.message;
     }
 }
 
@@ -99,7 +150,10 @@ async function resendReport(id) {
     try {
         const resp = await fetch('/api/reports/' + id + '/send', { method: 'POST' });
         const data = await resp.json();
-        alert('Email: ' + (data.email || 'N/A') + '\nWhatsApp: ' + (data.whatsapp || 'N/A'));
+        const parts = [];
+        if (data.email) parts.push('Email: ' + data.email);
+        if (data.whatsapp) parts.push('WhatsApp: ' + data.whatsapp);
+        alert(parts.join('\n') || 'Report sent!');
         window.location.reload();
     } catch(e) {
         alert('Error: ' + e.message);
@@ -108,7 +162,10 @@ async function resendReport(id) {
 
 function toggleReport(id) {
     const el = document.getElementById('report-content-' + id);
+    const btn = document.getElementById('toggle-btn-' + id);
+    const isHidden = el.classList.contains('hidden');
     el.classList.toggle('hidden');
+    btn.textContent = isHidden ? 'Hide' : 'View';
 }
 </script>
 {% endblock %}

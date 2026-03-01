@@ -487,7 +487,6 @@ async def _cmd_report(chat_id: str):
     await send_telegram_message(chat_id, "Generating daily brief...")
     from backend.services.report_generator import generate_daily_brief
     from backend.services.email_sender import send_daily_brief_email
-    from backend.services.whatsapp_sender import send_report_whatsapp
 
     report = await generate_daily_brief(today_str())
     if not report:
@@ -503,13 +502,15 @@ async def _cmd_report(chat_id: str):
         except Exception as e:
             results.append(f"Email failed: {str(e)[:100]}")
 
-    numbers = settings.get_management_whatsapp_list()
-    if numbers:
+    # Send report to management via Telegram
+    mgmt_chat_id = settings.management_telegram_chat_id
+    if mgmt_chat_id:
         try:
-            await send_report_whatsapp(report, numbers)
-            results.append(f"WhatsApp sent to {', '.join(numbers)}")
+            plain = report.get("content_plain") or report.get("content_markdown", "")
+            await send_telegram_message(mgmt_chat_id, f"*Daily Brief - {today_str()}*\n\n{plain}")
+            results.append(f"Telegram sent to management")
         except Exception as e:
-            results.append(f"WhatsApp failed: {str(e)[:100]}")
+            results.append(f"Telegram (mgmt) failed: {str(e)[:100]}")
 
     lines = ["*Daily brief generated & sent!*\n"] + [f"- {r}" for r in results]
     if not results:
@@ -521,7 +522,6 @@ async def _cmd_week(chat_id: str):
     await send_telegram_message(chat_id, "Generating weekly report (using Pro AI)...")
     from backend.services.report_generator import generate_weekly_report
     from backend.services.email_sender import send_weekly_report_email
-    from backend.services.whatsapp_sender import send_report_whatsapp
     from backend.utils.date_helpers import week_boundaries
 
     _, week_end = week_boundaries()
@@ -539,13 +539,15 @@ async def _cmd_week(chat_id: str):
         except Exception as e:
             results.append(f"Email failed: {str(e)[:100]}")
 
-    numbers = settings.get_management_whatsapp_list()
-    if numbers:
+    # Send report to management via Telegram
+    mgmt_chat_id = settings.management_telegram_chat_id
+    if mgmt_chat_id:
         try:
-            await send_report_whatsapp(report, numbers)
-            results.append(f"WhatsApp sent to {', '.join(numbers)}")
+            plain = report.get("content_plain") or report.get("content_markdown", "")
+            await send_telegram_message(mgmt_chat_id, f"*Weekly Report*\n\n{plain}")
+            results.append(f"Telegram sent to management")
         except Exception as e:
-            results.append(f"WhatsApp failed: {str(e)[:100]}")
+            results.append(f"Telegram (mgmt) failed: {str(e)[:100]}")
 
     lines = ["*Weekly report generated & sent!*\n"] + [f"- {r}" for r in results]
     if not results:

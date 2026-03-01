@@ -27,7 +27,6 @@ async def trigger_daily_report(request: Request):
 
     from backend.services.report_generator import generate_daily_brief
     from backend.services.email_sender import send_daily_brief_email
-    from backend.services.whatsapp_sender import send_report_whatsapp
 
     date = today_str()
     report = await generate_daily_brief(date)
@@ -36,6 +35,7 @@ async def trigger_daily_report(request: Request):
 
     results = []
 
+    # Send via Email
     emails = settings.get_management_emails_list()
     if emails:
         try:
@@ -44,15 +44,17 @@ async def trigger_daily_report(request: Request):
         except Exception as e:
             results.append(f"email_error:{str(e)[:100]}")
 
-    numbers = settings.get_management_whatsapp_list()
-    if numbers:
+    # Send to management via Telegram
+    mgmt_chat_id = settings.management_telegram_chat_id
+    if mgmt_chat_id:
         try:
-            await send_report_whatsapp(report, numbers)
-            results.append(f"whatsapp:{','.join(numbers)}")
+            plain = report.get("content_plain") or report.get("content_markdown", "")
+            await send_telegram_message(mgmt_chat_id, f"*Daily Brief - {date}*\n\n{plain}")
+            results.append("telegram:management")
         except Exception as e:
-            results.append(f"whatsapp_error:{str(e)[:100]}")
+            results.append(f"telegram_error:{str(e)[:100]}")
 
-    # Also notify via Telegram
+    # Notify PM (you) on Telegram
     if settings.telegram_chat_id:
         await send_telegram_message(
             settings.telegram_chat_id,
@@ -69,7 +71,6 @@ async def trigger_weekly_report(request: Request):
 
     from backend.services.report_generator import generate_weekly_report
     from backend.services.email_sender import send_weekly_report_email
-    from backend.services.whatsapp_sender import send_report_whatsapp
 
     _, week_end = week_boundaries()
     report = await generate_weekly_report(week_end)
@@ -78,6 +79,7 @@ async def trigger_weekly_report(request: Request):
 
     results = []
 
+    # Send via Email
     emails = settings.get_management_emails_list()
     if emails:
         try:
@@ -86,14 +88,17 @@ async def trigger_weekly_report(request: Request):
         except Exception as e:
             results.append(f"email_error:{str(e)[:100]}")
 
-    numbers = settings.get_management_whatsapp_list()
-    if numbers:
+    # Send to management via Telegram
+    mgmt_chat_id = settings.management_telegram_chat_id
+    if mgmt_chat_id:
         try:
-            await send_report_whatsapp(report, numbers)
-            results.append(f"whatsapp:{','.join(numbers)}")
+            plain = report.get("content_plain") or report.get("content_markdown", "")
+            await send_telegram_message(mgmt_chat_id, f"*Weekly Report*\n\n{plain}")
+            results.append("telegram:management")
         except Exception as e:
-            results.append(f"whatsapp_error:{str(e)[:100]}")
+            results.append(f"telegram_error:{str(e)[:100]}")
 
+    # Notify PM (you) on Telegram
     if settings.telegram_chat_id:
         await send_telegram_message(
             settings.telegram_chat_id,

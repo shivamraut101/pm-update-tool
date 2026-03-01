@@ -20,6 +20,7 @@ class Settings(BaseSettings):
     # Telegram Bot
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""
+    management_telegram_chat_id: str = ""  # Management person's chat ID for receiving reports
 
     # SMTP (Email)
     smtp_host: str = "smtp.gmail.com"

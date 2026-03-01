@@ -36,6 +36,12 @@ const client = new Client({
       "--disable-gpu",
       "--single-process",
       "--no-zygote",
+      "--disable-extensions",
+      "--disable-background-networking",
+      "--disable-default-apps",
+      "--disable-sync",
+      "--disable-translate",
+      "--js-flags=--max-old-space-size=256",
     ],
   },
 });
@@ -144,26 +150,74 @@ app.get("/health", (req, res) => {
   });
 });
 
-// Get QR code for authentication
-app.get("/qr", (req, res) => {
+// Get QR code data as JSON (for API polling)
+app.get("/qr/data", (req, res) => {
   if (clientReady) {
-    res.send("<h2>WhatsApp is already connected!</h2>");
-    return;
+    return res.json({ status: "connected" });
   }
   if (!qrCode) {
-    res.send("<h2>Waiting for QR code... Refresh in a few seconds.</h2>");
-    return;
+    return res.json({ status: "waiting" });
   }
-  // Render QR as a simple HTML page
-  const qrSvgUrl = `https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(qrCode)}`;
+  return res.json({ status: "qr_ready", qr: qrCode });
+});
+
+// Get QR code for authentication
+app.get("/qr", (req, res) => {
   res.send(`
     <html>
-    <head><title>WhatsApp QR Code</title></head>
-    <body style="display:flex; flex-direction:column; align-items:center; padding:40px; font-family:sans-serif;">
-      <h2>Scan this QR code with WhatsApp</h2>
-      <img src="${qrSvgUrl}" width="300" height="300" />
-      <p style="margin-top:20px; color:#666;">Open WhatsApp > Settings > Linked Devices > Link a Device</p>
-      <script>setTimeout(() => location.reload(), 15000);</script>
+    <head>
+      <title>WhatsApp QR Code</title>
+      <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
+    </head>
+    <body style="display:flex; flex-direction:column; align-items:center; padding:40px; font-family:sans-serif; background:#f5f5f5;">
+      <h2 id="title" style="color:#333;">Loading...</h2>
+      <canvas id="qr-canvas" style="margin:20px 0;"></canvas>
+      <p id="hint" style="color:#666; text-align:center;">Open WhatsApp > Settings > Linked Devices > Link a Device</p>
+      <p id="status" style="color:#999; font-size:13px; margin-top:10px;"></p>
+      <script>
+        let lastQr = null;
+        async function pollQR() {
+          try {
+            const resp = await fetch('/qr/data');
+            const data = await resp.json();
+            const title = document.getElementById('title');
+            const canvas = document.getElementById('qr-canvas');
+            const hint = document.getElementById('hint');
+            const status = document.getElementById('status');
+
+            if (data.status === 'connected') {
+              title.textContent = 'WhatsApp Connected!';
+              title.style.color = '#22c55e';
+              canvas.style.display = 'none';
+              hint.textContent = 'You can close this page.';
+              status.textContent = '';
+              return; // stop polling
+            }
+
+            if (data.status === 'waiting') {
+              title.textContent = 'Initializing WhatsApp...';
+              canvas.style.display = 'none';
+              status.textContent = 'Waiting for QR code. This may take 30-60 seconds on first launch.';
+            }
+
+            if (data.status === 'qr_ready' && data.qr) {
+              if (data.qr !== lastQr) {
+                lastQr = data.qr;
+                title.textContent = 'Scan this QR code with WhatsApp';
+                canvas.style.display = 'block';
+                QRCode.toCanvas(canvas, data.qr, { width: 300, margin: 2 }, function(err) {
+                  if (err) console.error(err);
+                });
+                status.textContent = 'QR refreshes automatically. Scan quickly!';
+              }
+            }
+          } catch(e) {
+            document.getElementById('status').textContent = 'Error: ' + e.message;
+          }
+          setTimeout(pollQR, 3000);
+        }
+        pollQR();
+      </script>
     </body>
     </html>
   `);
