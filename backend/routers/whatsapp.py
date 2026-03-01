@@ -1,11 +1,11 @@
-from fastapi import APIRouter, Request, Response
+from fastapi import APIRouter, Request
 from backend.database import get_db
 from backend.services.ai_parser import parse_update
 from backend.services.screenshot_processor import process_screenshots
 from backend.utils.date_helpers import today_str
 from backend.config import settings
 from datetime import datetime
-import httpx
+import base64
 import os
 import uuid
 
@@ -14,19 +14,21 @@ router = APIRouter()
 UPLOAD_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "uploads")
 
 
-@router.post("/whatsapp/webhook")
-async def whatsapp_webhook(request: Request):
-    """Handle incoming WhatsApp messages from Twilio."""
-    form_data = await request.form()
+@router.post("/whatsapp/incoming")
+async def whatsapp_incoming(request: Request):
+    """Handle incoming WhatsApp messages forwarded by the Node.js bridge."""
+    data = await request.json()
 
-    incoming_msg = form_data.get("Body", "")
-    num_media = int(form_data.get("NumMedia", 0))
-    from_number = form_data.get("From", "")
+    incoming_msg = data.get("text", "")
+    from_number = data.get("from_number", "")
+    has_media = data.get("has_media", False)
+    media = data.get("media")
 
-    # Verify this is from our authorized user
-    if settings.user_whatsapp and settings.user_whatsapp not in from_number:
-        twiml = '<?xml version="1.0" encoding="UTF-8"?><Response><Message>Unauthorized.</Message></Response>'
-        return Response(content=twiml, media_type="application/xml")
+    # Verify authorized user
+    if settings.user_whatsapp:
+        clean_number = settings.user_whatsapp.replace("+", "")
+        if clean_number not in from_number:
+            return {"reply": "Unauthorized."}
 
     db = get_db()
     date = today_str()
@@ -36,32 +38,26 @@ async def whatsapp_webhook(request: Request):
     if lower_msg == "status":
         return await _handle_status_command(db, date)
     if lower_msg == "help":
-        return await _handle_help_command()
+        return _handle_help_command()
 
-    # Download media (screenshots)
+    # Save screenshot if media was sent
     screenshot_paths = []
-    if num_media > 0:
+    if has_media and media:
         date_dir = os.path.join(UPLOAD_DIR, date)
         os.makedirs(date_dir, exist_ok=True)
-        for i in range(num_media):
-            media_url = form_data.get(f"MediaUrl{i}")
-            media_type = form_data.get(f"MediaContentType{i}", "")
-            if media_url and media_type.startswith("image/"):
-                ext = ".jpg" if "jpeg" in media_type else ".png"
-                filename = f"{uuid.uuid4().hex}{ext}"
-                filepath = os.path.join(date_dir, filename)
-                # Download from Twilio with auth
-                async with httpx.AsyncClient() as client:
-                    resp = await client.get(
-                        media_url,
-                        auth=(settings.twilio_account_sid, settings.twilio_auth_token),
-                    )
-                    if resp.status_code == 200:
-                        with open(filepath, "wb") as f:
-                            f.write(resp.content)
-                        screenshot_paths.append(f"uploads/{date}/{filename}")
 
-    # Process screenshots
+        mimetype = media.get("mimetype", "image/jpeg")
+        ext = ".png" if "png" in mimetype else ".jpg"
+        filename = f"{uuid.uuid4().hex}{ext}"
+        filepath = os.path.join(date_dir, filename)
+
+        # Decode base64 image data
+        img_data = base64.b64decode(media.get("data", ""))
+        with open(filepath, "wb") as f:
+            f.write(img_data)
+        screenshot_paths.append(f"uploads/{date}/{filename}")
+
+    # Process screenshots with AI
     screenshot_text = ""
     if screenshot_paths:
         full_paths = [
@@ -70,11 +66,12 @@ async def whatsapp_webhook(request: Request):
         ]
         screenshot_text = await process_screenshots(full_paths)
 
-    # Combine and parse
+    # Combine text and screenshot content
     combined_text = incoming_msg
     if screenshot_text:
         combined_text += f"\n\n[Screenshot content]: {screenshot_text}"
 
+    # Parse with AI
     projects = await db.projects.find({"status": "active"}).to_list(None)
     team_members = await db.team_members.find({"is_active": True}).to_list(None)
 
@@ -94,7 +91,7 @@ async def whatsapp_webhook(request: Request):
     }
     await db.updates.insert_one(update_doc)
 
-    # Build acknowledgment
+    # Build acknowledgment reply
     ack_parts = ["Got it!"]
     team_updates = parsed.get("team_updates", [])
     if team_updates:
@@ -111,51 +108,56 @@ async def whatsapp_webhook(request: Request):
         ack_parts.append(f"{len(blockers)} blocker(s) flagged.")
 
     reply_text = " ".join(ack_parts)
-
-    twiml = f'<?xml version="1.0" encoding="UTF-8"?><Response><Message>{reply_text}</Message></Response>'
-    return Response(content=twiml, media_type="application/xml")
+    return {"reply": reply_text}
 
 
-@router.get("/whatsapp/webhook")
-async def whatsapp_webhook_verify(request: Request):
-    """Twilio webhook verification (GET)."""
-    return Response(content="OK", media_type="text/plain")
+@router.get("/whatsapp/status")
+async def whatsapp_bridge_status():
+    """Check WhatsApp bridge connection status."""
+    import httpx
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(
+                f"{settings.whatsapp_bridge_url}/health",
+                timeout=5.0,
+            )
+            return resp.json()
+    except Exception as e:
+        return {"status": "disconnected", "error": str(e)}
 
 
 async def _handle_status_command(db, date):
-    """Return today's update summary."""
     count = await db.updates.count_documents({"date": date})
     if count == 0:
-        text = "No updates submitted today yet."
-    else:
-        updates = await db.updates.find({"date": date}).to_list(None)
-        total_team = sum(
-            len(u.get("parsed", {}).get("team_updates", [])) for u in updates
-        )
-        total_actions = sum(
-            len(u.get("parsed", {}).get("action_items", [])) for u in updates
-        )
-        total_blockers = sum(
-            len(u.get("parsed", {}).get("blockers", [])) for u in updates
-        )
-        text = (
+        return {"reply": "No updates submitted today yet."}
+
+    updates = await db.updates.find({"date": date}).to_list(None)
+    total_team = sum(
+        len(u.get("parsed", {}).get("team_updates", [])) for u in updates
+    )
+    total_actions = sum(
+        len(u.get("parsed", {}).get("action_items", [])) for u in updates
+    )
+    total_blockers = sum(
+        len(u.get("parsed", {}).get("blockers", [])) for u in updates
+    )
+    return {
+        "reply": (
             f"Today's summary: {count} update(s), "
             f"{total_team} team activities, "
             f"{total_actions} action item(s), "
             f"{total_blockers} blocker(s)."
         )
-    twiml = f'<?xml version="1.0" encoding="UTF-8"?><Response><Message>{text}</Message></Response>'
-    return Response(content=twiml, media_type="application/xml")
+    }
 
 
-async def _handle_help_command():
-    """Return help text."""
-    text = (
-        "PM Update Tool - Commands:\n"
-        "- Just type your update naturally\n"
-        "- Send screenshots of chats/boards\n"
-        "- 'status' - Today's summary\n"
-        "- 'help' - This message"
-    )
-    twiml = f'<?xml version="1.0" encoding="UTF-8"?><Response><Message>{text}</Message></Response>'
-    return Response(content=twiml, media_type="application/xml")
+def _handle_help_command():
+    return {
+        "reply": (
+            "PM Update Tool - Commands:\n"
+            "- Just type your update naturally\n"
+            "- Send screenshots of chats/boards\n"
+            "- 'status' - Today's summary\n"
+            "- 'help' - This message"
+        )
+    }

@@ -39,3 +39,11 @@ Thumbs.db
 
 # Temp files
 tmpclaude-*
+nul
+
+# Test files
+test_*.py
+
+# WhatsApp session data
+whatsapp-bridge/.wwebjs_auth/
+whatsapp-bridge/.wwebjs_cache/

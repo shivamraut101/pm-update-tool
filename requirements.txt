@@ -9,13 +9,15 @@ aiofiles==24.1.0
 
 # Database
 motor==3.7.0
+dnspython>=2.7.0
+certifi>=2024.12.14
 
 # AI / LLM
 google-generativeai==0.8.4
-Pillow==11.1.0
+Pillow>=11.1.0
 
-# WhatsApp
-twilio==9.4.3
+# WhatsApp (bridge communicates via HTTP)
+# No Python dependency - Node.js bridge runs separately
 
 # Email
 aiosmtplib==3.0.2

@@ -7,13 +7,19 @@ class Settings(BaseSettings):
     mongodb_uri: str = "mongodb://localhost:27017"
     mongodb_db_name: str = "pm_update_tool"
 
+    # Reference DB (read-only)
+    ref_mongodb_uri: str = ""
+    ref_mongodb_db_name: str = "live"
+
     # Google Gemini
     gemini_api_key: str = ""
 
-    # Twilio (WhatsApp)
-    twilio_account_sid: str = ""
-    twilio_auth_token: str = ""
-    twilio_whatsapp_from: str = "whatsapp:+14155238886"
+    # WhatsApp Bridge (whatsapp-web.js)
+    whatsapp_bridge_url: str = "http://localhost:3001"
+
+    # Telegram Bot
+    telegram_bot_token: str = ""
+    telegram_chat_id: str = ""
 
     # SMTP (Email)
     smtp_host: str = "smtp.gmail.com"
@@ -35,6 +41,11 @@ class Settings(BaseSettings):
     # Management contacts (comma-separated in .env)
     management_emails: str = ""
     management_whatsapp: str = ""
+    management_cc_emails: str = ""
+
+    # Alert emails (sent to the user themselves)
+    alert_emails: str = ""
+    alert_cc_emails: str = ""
 
     # Simple API key
     api_key: str = "change_this_to_a_random_string"
@@ -48,10 +59,25 @@ class Settings(BaseSettings):
             return []
         return [e.strip() for e in self.management_emails.split(",") if e.strip()]
 
+    def get_management_cc_list(self) -> List[str]:
+        if not self.management_cc_emails:
+            return []
+        return [e.strip() for e in self.management_cc_emails.split(",") if e.strip()]
+
     def get_management_whatsapp_list(self) -> List[str]:
         if not self.management_whatsapp:
             return []
         return [n.strip() for n in self.management_whatsapp.split(",") if n.strip()]
+
+    def get_alert_emails_list(self) -> List[str]:
+        if not self.alert_emails:
+            return []
+        return [e.strip() for e in self.alert_emails.split(",") if e.strip()]
+
+    def get_alert_cc_list(self) -> List[str]:
+        if not self.alert_cc_emails:
+            return []
+        return [e.strip() for e in self.alert_cc_emails.split(",") if e.strip()]
 
 
 settings = Settings()

@@ -1,4 +1,5 @@
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
+import certifi
 from backend.config import settings
 
 client: AsyncIOMotorClient = None
@@ -7,11 +8,15 @@ db: AsyncIOMotorDatabase = None
 
 async def connect_db():
     global client, db
-    client = AsyncIOMotorClient(settings.mongodb_uri)
+    kwargs = {}
+    # Use certifi CA bundle for Atlas SRV connections
+    if settings.mongodb_uri.startswith("mongodb+srv"):
+        kwargs["tlsCAFile"] = certifi.where()
+    client = AsyncIOMotorClient(settings.mongodb_uri, **kwargs)
     db = client[settings.mongodb_db_name]
 
     # Create indexes
-    await db.projects.create_index("name", unique=True)
+    await db.projects.create_index("name")
     await db.projects.create_index("status")
     await db.team_members.create_index([("name", 1), ("nickname", 1)])
     await db.updates.create_index("date")
