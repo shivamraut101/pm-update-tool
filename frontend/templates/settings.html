@@ -1,0 +1,136 @@
+{% extends "base.html" %}
+{% set active_page = "settings" %}
+
+{% block title %}Settings - PM Update Tool{% endblock %}
+
+{% block content %}
+<div class="fade-in max-w-3xl">
+    <h1 class="text-2xl font-bold text-gray-800 mb-6">Settings</h1>
+
+    <div class="space-y-6">
+        <!-- Schedule Settings -->
+        <div class="bg-white rounded-lg shadow p-5">
+            <h2 class="text-lg font-semibold text-gray-700 mb-4">Schedule</h2>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                    <label class="block text-sm text-gray-600 mb-1">Daily Brief Time</label>
+                    <input type="time" value="{{ settings.daily_brief_time }}" class="w-full border rounded px-3 py-2" disabled>
+                </div>
+                <div>
+                    <label class="block text-sm text-gray-600 mb-1">Timezone</label>
+                    <input type="text" value="{{ settings.timezone }}" class="w-full border rounded px-3 py-2" disabled>
+                </div>
+                <div>
+                    <label class="block text-sm text-gray-600 mb-1">Weekly Report Day</label>
+                    <input type="text" value="{{ settings.weekly_report_day }}" class="w-full border rounded px-3 py-2" disabled>
+                </div>
+                <div>
+                    <label class="block text-sm text-gray-600 mb-1">Weekly Report Time</label>
+                    <input type="time" value="{{ settings.weekly_report_time }}" class="w-full border rounded px-3 py-2" disabled>
+                </div>
+                <div>
+                    <label class="block text-sm text-gray-600 mb-1">No-Update Reminder Time</label>
+                    <input type="time" value="{{ settings.reminder_no_update_time }}" class="w-full border rounded px-3 py-2" disabled>
+                </div>
+            </div>
+            <p class="text-xs text-gray-400 mt-3">Edit these in the .env file and restart the server.</p>
+        </div>
+
+        <!-- Email Settings -->
+        <div class="bg-white rounded-lg shadow p-5">
+            <h2 class="text-lg font-semibold text-gray-700 mb-4">Email (SMTP)</h2>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                    <label class="block text-sm text-gray-600 mb-1">SMTP Host</label>
+                    <input type="text" value="{{ settings.smtp_host }}" class="w-full border rounded px-3 py-2 bg-gray-50" disabled>
+                </div>
+                <div>
+                    <label class="block text-sm text-gray-600 mb-1">SMTP Port</label>
+                    <input type="text" value="{{ settings.smtp_port }}" class="w-full border rounded px-3 py-2 bg-gray-50" disabled>
+                </div>
+                <div>
+                    <label class="block text-sm text-gray-600 mb-1">SMTP User</label>
+                    <input type="text" value="{{ settings.smtp_user or 'Not configured' }}" class="w-full border rounded px-3 py-2 bg-gray-50" disabled>
+                </div>
+                <div>
+                    <label class="block text-sm text-gray-600 mb-1">From Email</label>
+                    <input type="text" value="{{ settings.from_email or 'Not configured' }}" class="w-full border rounded px-3 py-2 bg-gray-50" disabled>
+                </div>
+                <div class="md:col-span-2">
+                    <label class="block text-sm text-gray-600 mb-1">Management Emails</label>
+                    <input type="text" value="{{ settings.management_emails or 'Not configured' }}" class="w-full border rounded px-3 py-2 bg-gray-50" disabled>
+                </div>
+            </div>
+            <div class="mt-3">
+                <button onclick="testEmail()" class="bg-indigo-600 text-white px-4 py-2 rounded text-sm hover:bg-indigo-700">
+                    Send Test Email
+                </button>
+                <span id="email-test-status" class="ml-2 text-sm"></span>
+            </div>
+        </div>
+
+        <!-- WhatsApp Settings -->
+        <div class="bg-white rounded-lg shadow p-5">
+            <h2 class="text-lg font-semibold text-gray-700 mb-4">WhatsApp (Twilio)</h2>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                    <label class="block text-sm text-gray-600 mb-1">Twilio Account SID</label>
+                    <input type="text" value="{{ '***' + settings.twilio_account_sid[-4:] if settings.twilio_account_sid else 'Not configured' }}"
+                           class="w-full border rounded px-3 py-2 bg-gray-50" disabled>
+                </div>
+                <div>
+                    <label class="block text-sm text-gray-600 mb-1">WhatsApp From Number</label>
+                    <input type="text" value="{{ settings.twilio_whatsapp_from or 'Not configured' }}"
+                           class="w-full border rounded px-3 py-2 bg-gray-50" disabled>
+                </div>
+                <div>
+                    <label class="block text-sm text-gray-600 mb-1">Your WhatsApp</label>
+                    <input type="text" value="{{ settings.user_whatsapp or 'Not configured' }}"
+                           class="w-full border rounded px-3 py-2 bg-gray-50" disabled>
+                </div>
+                <div>
+                    <label class="block text-sm text-gray-600 mb-1">Management WhatsApp</label>
+                    <input type="text" value="{{ settings.management_whatsapp or 'Not configured' }}"
+                           class="w-full border rounded px-3 py-2 bg-gray-50" disabled>
+                </div>
+            </div>
+            <div class="mt-3">
+                <button onclick="testWhatsApp()" class="bg-green-600 text-white px-4 py-2 rounded text-sm hover:bg-green-700">
+                    Send Test WhatsApp
+                </button>
+                <span id="whatsapp-test-status" class="ml-2 text-sm"></span>
+            </div>
+        </div>
+
+        <!-- AI Settings -->
+        <div class="bg-white rounded-lg shadow p-5">
+            <h2 class="text-lg font-semibold text-gray-700 mb-4">AI (Google Gemini)</h2>
+            <div>
+                <label class="block text-sm text-gray-600 mb-1">API Key</label>
+                <input type="text" value="{{ '***' + settings.gemini_api_key[-4:] if settings.gemini_api_key else 'Not configured' }}"
+                       class="w-full border rounded px-3 py-2 bg-gray-50" disabled>
+            </div>
+            <p class="text-xs text-gray-400 mt-2">Using gemini-2.0-flash model. Free tier: 15 RPM, 1500 RPD.</p>
+        </div>
+    </div>
+</div>
+
+<script>
+async function testEmail() {
+    const status = document.getElementById('email-test-status');
+    status.textContent = 'Sending...';
+    status.className = 'ml-2 text-sm text-blue-600';
+    // For now, just show a message. Full test endpoint can be added later.
+    status.textContent = 'Configure SMTP in .env file first, then restart.';
+    status.className = 'ml-2 text-sm text-gray-500';
+}
+
+async function testWhatsApp() {
+    const status = document.getElementById('whatsapp-test-status');
+    status.textContent = 'Sending...';
+    status.className = 'ml-2 text-sm text-blue-600';
+    status.textContent = 'Configure Twilio in .env file first, then restart.';
+    status.className = 'ml-2 text-sm text-gray-500';
+}
+</script>
+{% endblock %}

@@ -1,0 +1,92 @@
+{% extends "base.html" %}
+{% set active_page = "chat" %}
+
+{% block title %}Chat - PM Update Tool{% endblock %}
+
+{% block content %}
+<div class="fade-in max-w-4xl mx-auto">
+    <h1 class="text-2xl font-bold text-gray-800 mb-4">Daily Updates</h1>
+
+    <!-- Updates Feed -->
+    <div id="updates-feed" class="space-y-4 mb-6" style="max-height: 500px; overflow-y: auto;">
+        {% for u in updates %}
+        <div class="fade-in">
+            <!-- User message -->
+            <div class="flex justify-end mb-2">
+                <div class="chat-bubble bg-indigo-600 text-white rounded-2xl rounded-br-md px-4 py-2 shadow">
+                    <p>{{ u.raw_text }}</p>
+                    {% if u.has_screenshot %}
+                    <p class="text-indigo-200 text-xs mt-1">+ {{ u.screenshot_paths | length }} screenshot(s)</p>
+                    {% endif %}
+                    <p class="text-indigo-200 text-xs mt-1">via {{ u.source }}</p>
+                </div>
+            </div>
+            <!-- AI parsed response -->
+            <div class="flex justify-start mb-2">
+                <div class="chat-bubble bg-white border rounded-2xl rounded-bl-md px-4 py-2 shadow-sm">
+                    {% if u.parsed %}
+                    {% for tu in u.parsed.get('team_updates', []) %}
+                    <div class="flex items-center space-x-2 mb-1">
+                        <span class="text-xs font-semibold bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded">{{ tu.team_member_name }}</span>
+                        <span class="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded">{{ tu.project_name }}</span>
+                        <span class="text-xs px-2 py-0.5 rounded
+                            {% if tu.status == 'completed' %}bg-green-50 text-green-700
+                            {% elif tu.status == 'blocked' %}bg-red-50 text-red-700
+                            {% else %}bg-blue-50 text-blue-700{% endif %}">{{ tu.status }}</span>
+                    </div>
+                    <p class="text-sm text-gray-700 ml-2 mb-2">{{ tu.summary }}</p>
+                    {% endfor %}
+                    {% for ai in u.parsed.get('action_items', []) %}
+                    <p class="text-sm text-amber-700">Action: {{ ai.description }}</p>
+                    {% endfor %}
+                    {% for b in u.parsed.get('blockers', []) %}
+                    <p class="text-sm text-red-700">Blocker: {{ b.description }}</p>
+                    {% endfor %}
+                    {% if u.parsed.get('general_notes') %}
+                    <p class="text-sm text-gray-500 italic">{{ u.parsed.general_notes }}</p>
+                    {% endif %}
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+
+    <!-- Input Area -->
+    <div class="bg-white rounded-lg shadow-lg p-4 sticky bottom-4">
+        <form id="update-form" enctype="multipart/form-data">
+            <!-- Screenshot upload -->
+            <div id="drop-zone"
+                 class="border-2 border-dashed border-gray-300 rounded-lg p-4 mb-3 text-center text-gray-400 hover:border-indigo-400 transition-colors cursor-pointer hidden">
+                <p>Drop screenshots here or click to upload</p>
+                <input type="file" id="file-input" name="screenshots" multiple accept="image/*" class="hidden">
+            </div>
+            <div id="preview-area" class="flex flex-wrap gap-2 mb-3"></div>
+
+            <!-- Text input -->
+            <div class="flex items-end space-x-2">
+                <button type="button" id="attach-btn" class="p-2 text-gray-400 hover:text-indigo-600" title="Attach screenshot">
+                    <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13"></path>
+                    </svg>
+                </button>
+                <textarea id="update-text" name="raw_text"
+                    class="flex-1 border rounded-lg px-3 py-2 resize-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                    rows="2"
+                    placeholder="What happened today? Mention team members, projects, client updates..."></textarea>
+                <button type="submit" id="send-btn"
+                    class="bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700 transition-colors disabled:opacity-50">
+                    Send
+                </button>
+            </div>
+        </form>
+        <div id="loading" class="hidden text-center py-2">
+            <span class="text-indigo-600">Processing with AI...</span>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script src="/static/js/chat.js"></script>
+{% endblock %}

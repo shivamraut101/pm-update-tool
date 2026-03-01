@@ -1,0 +1,114 @@
+{% extends "base.html" %}
+{% set active_page = "reports" %}
+
+{% block title %}Reports - PM Update Tool{% endblock %}
+
+{% block content %}
+<div class="fade-in">
+    <div class="flex justify-between items-center mb-6">
+        <h1 class="text-2xl font-bold text-gray-800">Reports</h1>
+        <div class="space-x-2">
+            <button onclick="generateReport('daily')"
+                    class="bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700 text-sm">
+                Generate Daily Brief
+            </button>
+            <button onclick="generateReport('weekly')"
+                    class="bg-purple-600 text-white px-4 py-2 rounded-lg hover:bg-purple-700 text-sm">
+                Generate Weekly Report
+            </button>
+        </div>
+    </div>
+
+    <div id="generate-status" class="hidden bg-blue-50 border border-blue-200 text-blue-700 rounded-lg p-3 mb-4"></div>
+
+    <!-- Reports List -->
+    <div class="space-y-4">
+        {% for r in reports %}
+        <div class="bg-white rounded-lg shadow p-5">
+            <div class="flex justify-between items-start">
+                <div class="flex items-center space-x-3">
+                    <span class="px-3 py-1 rounded-full text-sm font-medium
+                        {% if r.type == 'daily' %}bg-blue-100 text-blue-700{% else %}bg-purple-100 text-purple-700{% endif %}">
+                        {{ r.type | capitalize }}
+                    </span>
+                    <span class="font-medium text-gray-800">{{ r.date }}</span>
+                    {% if r.type == 'weekly' and r.week_start %}
+                    <span class="text-sm text-gray-500">({{ r.week_start }} to {{ r.week_end }})</span>
+                    {% endif %}
+                </div>
+                <div class="flex items-center space-x-3">
+                    <span class="text-sm">
+                        Email:
+                        {% if r.delivery_status.email.sent %}
+                        <span class="text-green-600 font-medium">Sent</span>
+                        {% else %}
+                        <span class="text-gray-400">Pending</span>
+                        {% endif %}
+                    </span>
+                    <span class="text-sm">
+                        WhatsApp:
+                        {% if r.delivery_status.whatsapp.sent %}
+                        <span class="text-green-600 font-medium">Sent</span>
+                        {% else %}
+                        <span class="text-gray-400">Pending</span>
+                        {% endif %}
+                    </span>
+                    <button onclick="resendReport('{{ r._id }}')" class="text-indigo-600 hover:text-indigo-800 text-sm">Re-send</button>
+                    <button onclick="toggleReport('{{ r._id }}')" class="text-gray-600 hover:text-gray-800 text-sm">View</button>
+                </div>
+            </div>
+            <div id="report-content-{{ r._id }}" class="hidden mt-4 border-t pt-4">
+                <div class="prose max-w-none text-sm">
+                    {{ r.content_html | safe }}
+                </div>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+
+    {% if not reports %}
+    <div class="bg-white rounded-lg shadow p-8 text-center text-gray-400">
+        No reports generated yet. Submit some updates first, then generate a daily brief.
+    </div>
+    {% endif %}
+</div>
+
+<script>
+async function generateReport(type) {
+    const statusEl = document.getElementById('generate-status');
+    statusEl.classList.remove('hidden');
+    statusEl.textContent = 'Generating ' + type + ' report...';
+
+    try {
+        const resp = await fetch('/api/reports/generate/' + type, { method: 'POST' });
+        const data = await resp.json();
+        if (data._id || data.message) {
+            statusEl.textContent = data.message || (type + ' report generated successfully!');
+            setTimeout(() => window.location.reload(), 1500);
+        }
+    } catch(e) {
+        statusEl.textContent = 'Error: ' + e.message;
+        statusEl.classList.replace('bg-blue-50', 'bg-red-50');
+        statusEl.classList.replace('border-blue-200', 'border-red-200');
+        statusEl.classList.replace('text-blue-700', 'text-red-700');
+    }
+}
+
+async function resendReport(id) {
+    if (!confirm('Re-send this report via email and WhatsApp?')) return;
+    try {
+        const resp = await fetch('/api/reports/' + id + '/send', { method: 'POST' });
+        const data = await resp.json();
+        alert('Email: ' + (data.email || 'N/A') + '\nWhatsApp: ' + (data.whatsapp || 'N/A'));
+        window.location.reload();
+    } catch(e) {
+        alert('Error: ' + e.message);
+    }
+}
+
+function toggleReport(id) {
+    const el = document.getElementById('report-content-' + id);
+    el.classList.toggle('hidden');
+}
+</script>
+{% endblock %}

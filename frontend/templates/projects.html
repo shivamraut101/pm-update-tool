@@ -1,0 +1,120 @@
+{% extends "base.html" %}
+{% set active_page = "projects" %}
+
+{% block title %}Projects - PM Update Tool{% endblock %}
+
+{% block content %}
+<div class="fade-in">
+    <div class="flex justify-between items-center mb-6">
+        <h1 class="text-2xl font-bold text-gray-800">Projects</h1>
+        <button onclick="document.getElementById('add-project-form').classList.toggle('hidden')"
+                class="bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700 text-sm">
+            + Add Project
+        </button>
+    </div>
+
+    <!-- Add Project Form -->
+    <div id="add-project-form" class="hidden bg-white rounded-lg shadow p-5 mb-6">
+        <h2 class="text-lg font-semibold mb-3">New Project</h2>
+        <form id="project-form" class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+                <label class="block text-sm text-gray-600 mb-1">Project Name *</label>
+                <input type="text" name="name" required class="w-full border rounded px-3 py-2 focus:ring-2 focus:ring-indigo-500">
+            </div>
+            <div>
+                <label class="block text-sm text-gray-600 mb-1">Code (short identifier)</label>
+                <input type="text" name="code" placeholder="e.g. ALPHA" class="w-full border rounded px-3 py-2 focus:ring-2 focus:ring-indigo-500">
+            </div>
+            <div>
+                <label class="block text-sm text-gray-600 mb-1">Client Name</label>
+                <input type="text" name="client_name" class="w-full border rounded px-3 py-2 focus:ring-2 focus:ring-indigo-500">
+            </div>
+            <div>
+                <label class="block text-sm text-gray-600 mb-1">Status</label>
+                <select name="status" class="w-full border rounded px-3 py-2 focus:ring-2 focus:ring-indigo-500">
+                    <option value="active">Active</option>
+                    <option value="on_hold">On Hold</option>
+                    <option value="completed">Completed</option>
+                </select>
+            </div>
+            <div class="md:col-span-2">
+                <label class="block text-sm text-gray-600 mb-1">Description</label>
+                <textarea name="description" rows="2" class="w-full border rounded px-3 py-2 focus:ring-2 focus:ring-indigo-500"></textarea>
+            </div>
+            <div class="md:col-span-2">
+                <button type="submit" class="bg-indigo-600 text-white px-4 py-2 rounded hover:bg-indigo-700">Save Project</button>
+                <button type="button" onclick="document.getElementById('add-project-form').classList.add('hidden')"
+                        class="ml-2 px-4 py-2 border rounded hover:bg-gray-50">Cancel</button>
+            </div>
+        </form>
+    </div>
+
+    <!-- Projects Table -->
+    <div class="bg-white rounded-lg shadow overflow-hidden">
+        <table class="w-full">
+            <thead class="bg-gray-50">
+                <tr>
+                    <th class="px-4 py-3 text-left text-sm font-semibold text-gray-600">Name</th>
+                    <th class="px-4 py-3 text-left text-sm font-semibold text-gray-600">Code</th>
+                    <th class="px-4 py-3 text-left text-sm font-semibold text-gray-600">Client</th>
+                    <th class="px-4 py-3 text-left text-sm font-semibold text-gray-600">Status</th>
+                    <th class="px-4 py-3 text-left text-sm font-semibold text-gray-600">Actions</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y" id="projects-list">
+                {% for p in projects %}
+                <tr class="hover:bg-gray-50">
+                    <td class="px-4 py-3 font-medium">{{ p.name }}</td>
+                    <td class="px-4 py-3 text-gray-600">{{ p.code }}</td>
+                    <td class="px-4 py-3 text-gray-600">{{ p.client_name }}</td>
+                    <td class="px-4 py-3">
+                        <span class="px-2 py-1 rounded-full text-xs font-medium
+                            {% if p.status == 'active' %}bg-green-100 text-green-700
+                            {% elif p.status == 'on_hold' %}bg-yellow-100 text-yellow-700
+                            {% elif p.status == 'completed' %}bg-blue-100 text-blue-700
+                            {% else %}bg-gray-100 text-gray-700{% endif %}">
+                            {{ p.status }}
+                        </span>
+                    </td>
+                    <td class="px-4 py-3">
+                        <button onclick="deleteProject('{{ p._id }}')" class="text-red-600 hover:text-red-800 text-sm">Archive</button>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% if not projects %}
+        <p class="text-center text-gray-400 py-8">No projects yet. Add your first project above.</p>
+        {% endif %}
+    </div>
+</div>
+
+<script>
+document.getElementById('project-form').addEventListener('submit', async function(e) {
+    e.preventDefault();
+    const formData = new FormData(this);
+    const data = Object.fromEntries(formData.entries());
+    try {
+        const resp = await fetch('/api/projects', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(data)
+        });
+        if (resp.ok) {
+            window.location.reload();
+        } else {
+            const err = await resp.json();
+            alert(err.detail || 'Error creating project');
+        }
+    } catch(e) {
+        alert('Error: ' + e.message);
+    }
+});
+
+async function deleteProject(id) {
+    if (!confirm('Archive this project?')) return;
+    await fetch('/api/projects/' + id, { method: 'DELETE' });
+    window.location.reload();
+}
+</script>
+{% endblock %}
