@@ -8,7 +8,7 @@ const fs = require("fs");
 const path = require("path");
 
 // Config
-const PORT = process.env.WA_BRIDGE_PORT || 3001;
+const PORT = process.env.PORT || process.env.WA_BRIDGE_PORT || 3001;
 const PM_API_URL = process.env.PM_API_URL || "http://localhost:8000";
 const PM_API_KEY = process.env.PM_API_KEY || "";
 const AUTHORIZED_NUMBER = process.env.AUTHORIZED_NUMBER || "";
@@ -28,7 +28,15 @@ const client = new Client({
   authStrategy: new LocalAuth({ dataPath: path.join(__dirname, ".wwebjs_auth") }),
   puppeteer: {
     headless: true,
-    args: ["--no-sandbox", "--disable-setuid-sandbox"],
+    executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
+    args: [
+      "--no-sandbox",
+      "--disable-setuid-sandbox",
+      "--disable-dev-shm-usage",
+      "--disable-gpu",
+      "--single-process",
+      "--no-zygote",
+    ],
   },
 });
 
