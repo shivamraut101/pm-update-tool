@@ -35,12 +35,20 @@ async def sync_from_reference_db():
             role_map = {"admin": "Admin", "dev": "Developer"}
             role = role_map.get(user.get("role", "dev"), "Developer")
 
+            # Base aliases
+            aliases = [first_name.lower(), name.lower()]
+
+            # Add extra known aliases for specific users
+            email = user.get("email", "")
+            if email == "aman@primexmeta.com":
+                aliases.extend(["aman", "aman sharma"])
+
             doc = {
                 "name": name,
                 "nickname": first_name,
-                "aliases": [first_name.lower(), name.lower()],
+                "aliases": aliases,
                 "role": role,
-                "email": user.get("email", ""),
+                "email": email,
                 "project_ids": [],
                 "is_active": True,
                 "ref_id": str(user["_id"]),
