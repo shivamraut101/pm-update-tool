@@ -1,17 +1,17 @@
+import base64
+import os
+import tempfile
+from datetime import datetime
+
 from fastapi import APIRouter, Request
+
+from backend.config import settings
 from backend.database import get_db
 from backend.services.ai_parser import parse_update
 from backend.services.screenshot_processor import process_screenshots
 from backend.utils.date_helpers import today_str
-from backend.config import settings
-from datetime import datetime
-import base64
-import os
-import uuid
 
 router = APIRouter()
-
-UPLOAD_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "uploads")
 
 
 @router.post("/whatsapp/incoming")
@@ -40,31 +40,12 @@ async def whatsapp_incoming(request: Request):
     if lower_msg == "help":
         return _handle_help_command()
 
-    # Save screenshot if media was sent
-    screenshot_paths = []
-    if has_media and media:
-        date_dir = os.path.join(UPLOAD_DIR, date)
-        os.makedirs(date_dir, exist_ok=True)
-
-        mimetype = media.get("mimetype", "image/jpeg")
-        ext = ".png" if "png" in mimetype else ".jpg"
-        filename = f"{uuid.uuid4().hex}{ext}"
-        filepath = os.path.join(date_dir, filename)
-
-        # Decode base64 image data
-        img_data = base64.b64decode(media.get("data", ""))
-        with open(filepath, "wb") as f:
-            f.write(img_data)
-        screenshot_paths.append(f"uploads/{date}/{filename}")
-
-    # Process screenshots with AI
+    # Process screenshot via temp file (extract text, then delete)
     screenshot_text = ""
-    if screenshot_paths:
-        full_paths = [
-            os.path.join(os.path.dirname(__file__), "..", "..", path)
-            for path in screenshot_paths
-        ]
-        screenshot_text = await process_screenshots(full_paths)
+    if has_media and media:
+        img_data = base64.b64decode(media.get("data", ""))
+        if img_data:
+            screenshot_text = await _extract_and_cleanup_screenshot(img_data)
 
     # Combine text and screenshot content
     combined_text = incoming_msg
@@ -77,12 +58,12 @@ async def whatsapp_incoming(request: Request):
 
     parsed, confidence = await parse_update(combined_text, projects, team_members)
 
-    # Store update
+    # Store update (no file paths — just extracted text)
     update_doc = {
         "raw_text": incoming_msg,
         "source": "whatsapp",
-        "has_screenshot": len(screenshot_paths) > 0,
-        "screenshot_paths": screenshot_paths,
+        "has_screenshot": bool(screenshot_text),
+        "screenshot_paths": [],
         "screenshot_extracted_text": screenshot_text,
         "parsed": parsed,
         "ai_confidence": confidence,
@@ -125,6 +106,34 @@ async def whatsapp_bridge_status():
     except Exception as e:
         return {"status": "disconnected", "error": str(e)}
 
+
+# ---------------------------------------------------------------------------
+# Screenshot temp-file processing (same pattern as telegram_bot.py)
+# ---------------------------------------------------------------------------
+
+async def _extract_and_cleanup_screenshot(photo_data: bytes) -> str:
+    """Save photo to temp file, extract text with AI, then delete the file."""
+    tmp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
+            tmp.write(photo_data)
+            tmp_path = tmp.name
+        extracted = await process_screenshots([tmp_path])
+        return extracted
+    except Exception as e:
+        print(f"[whatsapp] Screenshot extraction error: {e}")
+        return ""
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except Exception:
+                pass
+
+
+# ---------------------------------------------------------------------------
+# Command handlers
+# ---------------------------------------------------------------------------
 
 async def _handle_status_command(db, date):
     count = await db.updates.count_documents({"date": date})

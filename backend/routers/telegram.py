@@ -1,0 +1,134 @@
+"""Telegram webhook route + cron trigger endpoints for Render deployment."""
+from fastapi import APIRouter, Request, HTTPException
+
+from backend.config import settings
+from backend.services.telegram_bot import handle_webhook_update, send_telegram_message
+from backend.utils.date_helpers import today_str, week_boundaries
+
+router = APIRouter()
+
+
+@router.post("/telegram/webhook")
+async def telegram_webhook(request: Request):
+    """Receive updates from Telegram via webhook."""
+    update = await request.json()
+    await handle_webhook_update(update)
+    return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
+# Cron trigger endpoints (called by cron-job.org or similar)
+# ---------------------------------------------------------------------------
+
+@router.post("/trigger/daily-report")
+async def trigger_daily_report(request: Request):
+    """Trigger daily brief generation + delivery. Secured by API key."""
+    _verify_api_key(request)
+
+    from backend.services.report_generator import generate_daily_brief
+    from backend.services.email_sender import send_daily_brief_email
+    from backend.services.whatsapp_sender import send_report_whatsapp
+
+    date = today_str()
+    report = await generate_daily_brief(date)
+    if not report:
+        return {"status": "skipped", "reason": "no updates today"}
+
+    results = []
+
+    emails = settings.get_management_emails_list()
+    if emails:
+        try:
+            await send_daily_brief_email(report, emails)
+            results.append(f"email:{','.join(emails)}")
+        except Exception as e:
+            results.append(f"email_error:{str(e)[:100]}")
+
+    numbers = settings.get_management_whatsapp_list()
+    if numbers:
+        try:
+            await send_report_whatsapp(report, numbers)
+            results.append(f"whatsapp:{','.join(numbers)}")
+        except Exception as e:
+            results.append(f"whatsapp_error:{str(e)[:100]}")
+
+    # Also notify via Telegram
+    if settings.telegram_chat_id:
+        await send_telegram_message(
+            settings.telegram_chat_id,
+            "Daily brief generated & sent.\n" + "\n".join(f"- {r}" for r in results),
+        )
+
+    return {"status": "sent", "date": date, "channels": results}
+
+
+@router.post("/trigger/weekly-report")
+async def trigger_weekly_report(request: Request):
+    """Trigger weekly report generation + delivery. Secured by API key."""
+    _verify_api_key(request)
+
+    from backend.services.report_generator import generate_weekly_report
+    from backend.services.email_sender import send_weekly_report_email
+    from backend.services.whatsapp_sender import send_report_whatsapp
+
+    _, week_end = week_boundaries()
+    report = await generate_weekly_report(week_end)
+    if not report:
+        return {"status": "skipped", "reason": "no daily reports this week"}
+
+    results = []
+
+    emails = settings.get_management_emails_list()
+    if emails:
+        try:
+            await send_weekly_report_email(report, emails)
+            results.append(f"email:{','.join(emails)}")
+        except Exception as e:
+            results.append(f"email_error:{str(e)[:100]}")
+
+    numbers = settings.get_management_whatsapp_list()
+    if numbers:
+        try:
+            await send_report_whatsapp(report, numbers)
+            results.append(f"whatsapp:{','.join(numbers)}")
+        except Exception as e:
+            results.append(f"whatsapp_error:{str(e)[:100]}")
+
+    if settings.telegram_chat_id:
+        await send_telegram_message(
+            settings.telegram_chat_id,
+            "Weekly report generated & sent.\n" + "\n".join(f"- {r}" for r in results),
+        )
+
+    return {"status": "sent", "week_end": week_end, "channels": results}
+
+
+@router.post("/trigger/reminder-check")
+async def trigger_reminder_check(request: Request):
+    """Trigger reminder engine check. Secured by API key."""
+    _verify_api_key(request)
+
+    from backend.services.reminder_engine import run_reminder_check
+    await run_reminder_check()
+    return {"status": "ok"}
+
+
+# ---------------------------------------------------------------------------
+# Health check (use with cron-job.org to keep Render awake)
+# ---------------------------------------------------------------------------
+
+@router.get("/health")
+async def health_check():
+    """Health check endpoint — use cron-job.org to ping every 5 min."""
+    return {"status": "ok", "service": "pm-update-tool"}
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _verify_api_key(request: Request):
+    """Check X-API-Key header or ?key= query param."""
+    key = request.headers.get("x-api-key") or request.query_params.get("key")
+    if not key or key != settings.api_key:
+        raise HTTPException(status_code=401, detail="Invalid API key")
