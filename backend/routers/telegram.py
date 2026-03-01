@@ -3,6 +3,7 @@ from fastapi import APIRouter, Request, HTTPException
 
 from backend.config import settings
 from backend.services.telegram_bot import handle_webhook_update, send_telegram_message
+from backend.services.email_sender import send_email
 from backend.utils.date_helpers import today_str, week_boundaries
 
 router = APIRouter()
@@ -116,6 +117,39 @@ async def trigger_reminder_check(request: Request):
     from backend.services.reminder_engine import run_reminder_check
     await run_reminder_check()
     return {"status": "ok"}
+
+
+# ---------------------------------------------------------------------------
+# Test endpoints
+# ---------------------------------------------------------------------------
+
+@router.post("/test-email")
+async def test_email():
+    """Send a test email to verify SMTP configuration works."""
+    if not settings.smtp_user or not settings.smtp_password:
+        raise HTTPException(status_code=400, detail="SMTP not configured. Set SMTP_USER and SMTP_PASSWORD in .env")
+
+    to_emails = settings.get_management_emails_list()
+    if not to_emails:
+        raise HTTPException(status_code=400, detail="No management emails configured. Set MANAGEMENT_EMAILS in .env")
+
+    try:
+        await send_email(
+            to_emails=to_emails,
+            subject="Test Email - PM Update Tool",
+            html_body=(
+                '<div style="font-family:sans-serif;padding:20px;">'
+                '<h2 style="color:#4f46e5;">Test Successful!</h2>'
+                '<p>Your SMTP email configuration is working correctly.</p>'
+                '<hr style="border-color:#e5e7eb;">'
+                '<small style="color:#9ca3af;">Sent from PM Update Tool</small>'
+                '</div>'
+            ),
+            plain_body="Test Successful! Your SMTP email configuration is working correctly.",
+        )
+        return {"status": "sent", "to": to_emails}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Email failed: {str(e)}")
 
 
 # ---------------------------------------------------------------------------

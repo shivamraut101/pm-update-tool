@@ -84,7 +84,7 @@ async def _daily_brief_job():
     """Generate and send daily brief."""
     from backend.services.report_generator import generate_daily_brief
     from backend.services.email_sender import send_daily_brief_email
-    from backend.services.whatsapp_sender import send_report_whatsapp
+    from backend.services.telegram_bot import send_telegram_message
 
     date = today_str()
     print(f"[Scheduler] Generating daily brief for {date}")
@@ -94,30 +94,44 @@ async def _daily_brief_job():
         print(f"[Scheduler] No updates for {date}, skipping daily brief")
         return
 
+    results = []
+
     # Send email
     emails = settings.get_management_emails_list()
     if emails:
         try:
             await send_daily_brief_email(report, emails)
+            results.append(f"email:{','.join(emails)}")
             print(f"[Scheduler] Daily brief emailed to {emails}")
         except Exception as e:
+            results.append(f"email_error:{str(e)[:100]}")
             print(f"[Scheduler] Email send error: {e}")
 
-    # Send WhatsApp
-    numbers = settings.get_management_whatsapp_list()
-    if numbers:
+    # Send to management via Telegram
+    mgmt_chat_id = settings.management_telegram_chat_id
+    if mgmt_chat_id:
         try:
-            await send_report_whatsapp(report, numbers)
-            print(f"[Scheduler] Daily brief sent via WhatsApp to {numbers}")
+            plain = report.get("content_plain") or report.get("content_markdown", "")
+            await send_telegram_message(mgmt_chat_id, f"*Daily Brief - {date}*\n\n{plain}")
+            results.append("telegram:management")
+            print(f"[Scheduler] Daily brief sent via Telegram to management")
         except Exception as e:
-            print(f"[Scheduler] WhatsApp send error: {e}")
+            results.append(f"telegram_error:{str(e)[:100]}")
+            print(f"[Scheduler] Telegram send error: {e}")
+
+    # Notify PM on Telegram
+    if settings.telegram_chat_id:
+        await send_telegram_message(
+            settings.telegram_chat_id,
+            "Daily brief generated & sent.\n" + "\n".join(f"- {r}" for r in results),
+        )
 
 
 async def _weekly_report_job():
     """Generate and send weekly report."""
     from backend.services.report_generator import generate_weekly_report
     from backend.services.email_sender import send_weekly_report_email
-    from backend.services.whatsapp_sender import send_report_whatsapp
+    from backend.services.telegram_bot import send_telegram_message
 
     _, week_end = week_boundaries()
     print(f"[Scheduler] Generating weekly report ending {week_end}")
@@ -127,21 +141,36 @@ async def _weekly_report_job():
         print("[Scheduler] No daily reports found for weekly summary")
         return
 
+    results = []
+
     emails = settings.get_management_emails_list()
     if emails:
         try:
             await send_weekly_report_email(report, emails)
+            results.append(f"email:{','.join(emails)}")
             print(f"[Scheduler] Weekly report emailed to {emails}")
         except Exception as e:
+            results.append(f"email_error:{str(e)[:100]}")
             print(f"[Scheduler] Email send error: {e}")
 
-    numbers = settings.get_management_whatsapp_list()
-    if numbers:
+    # Send to management via Telegram
+    mgmt_chat_id = settings.management_telegram_chat_id
+    if mgmt_chat_id:
         try:
-            await send_report_whatsapp(report, numbers)
-            print(f"[Scheduler] Weekly report sent via WhatsApp")
+            plain = report.get("content_plain") or report.get("content_markdown", "")
+            await send_telegram_message(mgmt_chat_id, f"*Weekly Report*\n\n{plain}")
+            results.append("telegram:management")
+            print(f"[Scheduler] Weekly report sent via Telegram to management")
         except Exception as e:
-            print(f"[Scheduler] WhatsApp send error: {e}")
+            results.append(f"telegram_error:{str(e)[:100]}")
+            print(f"[Scheduler] Telegram send error: {e}")
+
+    # Notify PM on Telegram
+    if settings.telegram_chat_id:
+        await send_telegram_message(
+            settings.telegram_chat_id,
+            "Weekly report generated & sent.\n" + "\n".join(f"- {r}" for r in results),
+        )
 
 
 async def _reminder_check_job():
@@ -154,7 +183,7 @@ async def _reminder_check_job():
 async def _no_update_reminder_job():
     """Check if user has submitted updates today, remind if not."""
     from backend.services.reminder_engine import run_reminder_checks
-    from backend.services.whatsapp_sender import send_reminder_whatsapp
+    from backend.services.telegram_bot import send_telegram_message
     from backend.database import get_db
 
     db = get_db()
@@ -164,10 +193,12 @@ async def _no_update_reminder_job():
     if count == 0:
         print(f"[Scheduler] No updates today ({date}), sending reminder")
         await run_reminder_checks()
-        try:
-            await send_reminder_whatsapp(
-                "You haven't submitted any project updates today. "
-                "The daily brief goes out soon!"
-            )
-        except Exception as e:
-            print(f"[Scheduler] Reminder WhatsApp error: {e}")
+        if settings.telegram_chat_id:
+            try:
+                await send_telegram_message(
+                    settings.telegram_chat_id,
+                    "You haven't submitted any project updates today. "
+                    "The daily brief goes out soon!",
+                )
+            except Exception as e:
+                print(f"[Scheduler] Reminder Telegram error: {e}")

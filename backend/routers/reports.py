@@ -5,7 +5,7 @@ from bson import ObjectId
 from backend.database import get_db
 from backend.services.report_generator import generate_daily_brief, generate_weekly_report
 from backend.services.email_sender import send_daily_brief_email, send_weekly_report_email
-from backend.services.whatsapp_sender import send_report_whatsapp
+from backend.services.telegram_bot import send_telegram_message
 from backend.utils.date_helpers import today_str, week_boundaries
 from backend.config import settings
 
@@ -62,7 +62,7 @@ async def trigger_weekly_report():
 
 @router.post("/reports/{report_id}/send")
 async def resend_report(report_id: str, channel: str = "both"):
-    """Re-send a report via email and/or WhatsApp."""
+    """Re-send a report via email and/or Telegram."""
     db = get_db()
     report = await db.reports.find_one({"_id": ObjectId(report_id)})
     if not report:
@@ -81,12 +81,17 @@ async def resend_report(report_id: str, channel: str = "both"):
         except Exception as e:
             results["email"] = f"failed: {str(e)}"
 
-    if channel in ("both", "whatsapp"):
-        try:
-            numbers = settings.get_management_whatsapp_list()
-            await send_report_whatsapp(report, numbers)
-            results["whatsapp"] = "sent"
-        except Exception as e:
-            results["whatsapp"] = f"failed: {str(e)}"
+    if channel in ("both", "telegram"):
+        mgmt_chat_id = settings.management_telegram_chat_id
+        if mgmt_chat_id:
+            try:
+                plain = report.get("content_plain") or report.get("content_markdown", "")
+                label = "Daily Brief" if report["type"] == "daily" else "Weekly Report"
+                await send_telegram_message(mgmt_chat_id, f"*{label}*\n\n{plain}")
+                results["telegram"] = "sent"
+            except Exception as e:
+                results["telegram"] = f"failed: {str(e)}"
+        else:
+            results["telegram"] = "skipped: no management chat ID configured"
 
     return results

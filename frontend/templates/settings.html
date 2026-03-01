@@ -62,42 +62,10 @@
                 </div>
             </div>
             <div class="mt-3">
-                <button onclick="testEmail()" class="bg-indigo-600 text-white px-4 py-2 rounded text-sm hover:bg-indigo-700">
+                <button id="email-test-btn" onclick="testEmail()" class="bg-indigo-600 text-white px-4 py-2 rounded text-sm hover:bg-indigo-700">
                     Send Test Email
                 </button>
                 <span id="email-test-status" class="ml-2 text-sm"></span>
-            </div>
-        </div>
-
-        <!-- WhatsApp Settings -->
-        <div class="bg-white rounded-lg shadow p-5">
-            <h2 class="text-lg font-semibold text-gray-700 mb-4">WhatsApp (Web Bridge)</h2>
-            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div>
-                    <label class="block text-sm text-gray-600 mb-1">Bridge URL</label>
-                    <input type="text" value="{{ settings.whatsapp_bridge_url or 'Not configured' }}"
-                           class="w-full border rounded px-3 py-2 bg-gray-50" disabled>
-                </div>
-                <div>
-                    <label class="block text-sm text-gray-600 mb-1">Bridge Status</label>
-                    <span id="wa-bridge-status" class="inline-block px-3 py-2 text-sm text-gray-400">Checking...</span>
-                </div>
-                <div>
-                    <label class="block text-sm text-gray-600 mb-1">Your WhatsApp</label>
-                    <input type="text" value="{{ settings.user_whatsapp or 'Not configured' }}"
-                           class="w-full border rounded px-3 py-2 bg-gray-50" disabled>
-                </div>
-                <div>
-                    <label class="block text-sm text-gray-600 mb-1">Management WhatsApp</label>
-                    <input type="text" value="{{ settings.management_whatsapp or 'Not configured' }}"
-                           class="w-full border rounded px-3 py-2 bg-gray-50" disabled>
-                </div>
-            </div>
-            <div class="mt-3">
-                <button onclick="testWhatsApp()" class="bg-green-600 text-white px-4 py-2 rounded text-sm hover:bg-green-700">
-                    Check Bridge Connection
-                </button>
-                <span id="whatsapp-test-status" class="ml-2 text-sm"></span>
             </div>
         </div>
 
@@ -116,12 +84,17 @@
                            class="w-full border rounded px-3 py-2 bg-gray-50" disabled>
                 </div>
                 <div>
+                    <label class="block text-sm text-gray-600 mb-1">Management Chat ID</label>
+                    <input type="text" value="{{ settings.management_telegram_chat_id or 'Not configured' }}"
+                           class="w-full border rounded px-3 py-2 bg-gray-50" disabled>
+                </div>
+                <div>
                     <label class="block text-sm text-gray-600 mb-1">Mode</label>
                     <input type="text" value="{{ 'Webhook' if settings.app_url else 'Long Polling' }}"
                            class="w-full border rounded px-3 py-2 bg-gray-50" disabled>
                 </div>
                 {% if settings.app_url %}
-                <div>
+                <div class="md:col-span-2">
                     <label class="block text-sm text-gray-600 mb-1">Webhook URL</label>
                     <input type="text" value="{{ settings.app_url }}/api/telegram/webhook"
                            class="w-full border rounded px-3 py-2 bg-gray-50" disabled>
@@ -146,56 +119,27 @@
 <script>
 async function testEmail() {
     const status = document.getElementById('email-test-status');
+    const btn = document.getElementById('email-test-btn');
+    btn.disabled = true;
+    btn.className = 'bg-gray-400 text-white px-4 py-2 rounded text-sm cursor-not-allowed';
     status.textContent = 'Sending...';
     status.className = 'ml-2 text-sm text-blue-600';
-    status.textContent = 'Configure SMTP in .env file first, then restart.';
-    status.className = 'ml-2 text-sm text-gray-500';
-}
-
-async function testWhatsApp() {
-    const status = document.getElementById('whatsapp-test-status');
-    status.textContent = 'Checking...';
-    status.className = 'ml-2 text-sm text-blue-600';
     try {
-        const resp = await fetch('/api/whatsapp/status');
+        const resp = await fetch('/api/test-email', { method: 'POST' });
         const data = await resp.json();
-        if (data.status === 'ready') {
-            status.textContent = 'Connected!';
+        if (resp.ok) {
+            status.textContent = 'Sent to ' + (data.to || []).join(', ');
             status.className = 'ml-2 text-sm text-green-600 font-medium';
-        } else if (data.qr_pending) {
-            status.textContent = 'QR scan needed';
-            status.className = 'ml-2 text-sm text-yellow-600';
         } else {
-            status.textContent = data.status || 'Disconnected';
+            status.textContent = data.detail || 'Failed';
             status.className = 'ml-2 text-sm text-red-600';
         }
     } catch(e) {
-        status.textContent = 'Bridge unreachable';
+        status.textContent = 'Error: ' + e.message;
         status.className = 'ml-2 text-sm text-red-500';
     }
+    btn.disabled = false;
+    btn.className = 'bg-indigo-600 text-white px-4 py-2 rounded text-sm hover:bg-indigo-700';
 }
-
-// Auto-check bridge status on load
-document.addEventListener('DOMContentLoaded', async function() {
-    try {
-        const resp = await fetch('/api/whatsapp/status');
-        const data = await resp.json();
-        const el = document.getElementById('wa-bridge-status');
-        if (data.status === 'ready') {
-            el.textContent = 'Connected';
-            el.className = 'inline-block px-3 py-2 text-sm text-green-600 font-medium';
-        } else if (data.qr_pending) {
-            el.textContent = 'QR scan needed';
-            el.className = 'inline-block px-3 py-2 text-sm text-yellow-600';
-        } else {
-            el.textContent = data.status || 'Disconnected';
-            el.className = 'inline-block px-3 py-2 text-sm text-red-500';
-        }
-    } catch(e) {
-        const el = document.getElementById('wa-bridge-status');
-        el.textContent = 'Unreachable';
-        el.className = 'inline-block px-3 py-2 text-sm text-red-500';
-    }
-});
 </script>
 {% endblock %}
