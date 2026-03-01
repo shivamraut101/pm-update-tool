@@ -114,8 +114,8 @@ async def trigger_reminder_check(request: Request):
     """Trigger reminder engine check. Secured by API key."""
     _verify_api_key(request)
 
-    from backend.services.reminder_engine import run_reminder_check
-    await run_reminder_check()
+    from backend.services.reminder_engine import run_reminder_checks
+    await run_reminder_checks()
     return {"status": "ok"}
 
 
