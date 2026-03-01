@@ -35,15 +35,24 @@ async def send_email(
     if cc_emails:
         all_recipients.extend(cc_emails)
 
-    await aiosmtplib.send(
-        msg,
-        hostname=settings.smtp_host,
-        port=settings.smtp_port,
-        start_tls=True,
-        username=settings.smtp_user,
-        password=settings.smtp_password,
-        recipients=all_recipients,
-    )
+    try:
+        await aiosmtplib.send(
+            msg,
+            hostname=settings.smtp_host,
+            port=settings.smtp_port,
+            start_tls=True,
+            username=settings.smtp_user,
+            password=settings.smtp_password,
+            recipients=all_recipients,
+            timeout=30,  # 30 second timeout
+        )
+        print(f"[email] Successfully sent to {all_recipients}")
+    except Exception as e:
+        error_type = type(e).__name__
+        error_msg = str(e)
+        print(f"[email] SMTP error: {error_type}: {error_msg}")
+        print(f"[email] Config: {settings.smtp_host}:{settings.smtp_port}, user={settings.smtp_user}")
+        raise  # Re-raise so caller can handle it
 
 
 async def send_daily_brief_email(report: dict, to_emails: list):
