@@ -20,12 +20,15 @@ async def send_email(
     resend.api_key = settings.resend_api_key
 
     params = {
-        "from": settings.from_email or "PM Update Tool <noreply@resend.dev>",
+        "from": f"PM Update Tool <{settings.from_email}>" if settings.from_email else "PM Update Tool <noreply@resend.dev>",
         "to": to_emails,
         "subject": subject,
         "html": html_body,
         "text": plain_body,
     }
+
+    if settings.from_email:
+        params["reply_to"] = settings.from_email
 
     if cc_emails:
         params["cc"] = cc_emails
