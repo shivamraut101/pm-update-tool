@@ -19,8 +19,8 @@ Pillow>=11.1.0
 # WhatsApp (bridge communicates via HTTP)
 # No Python dependency - Node.js bridge runs separately
 
-# Email
-aiosmtplib==3.0.2
+# Email (Resend API)
+resend>=2.0.0
 
 # Scheduling
 apscheduler==3.10.4

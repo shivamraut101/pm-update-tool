@@ -1,19 +1,15 @@
-from fastapi import APIRouter, Request
-from fastapi.templating import Jinja2Templates
-import os
+from fastapi import APIRouter
 
 from backend.database import get_db
+from backend.config import settings
 from backend.utils.date_helpers import today_str
 
 router = APIRouter()
 
-templates_dir = os.path.join(os.path.dirname(__file__), "..", "..", "frontend", "templates")
-templates = Jinja2Templates(directory=templates_dir)
 
-
-@router.get("/")
-async def dashboard_page(request: Request):
-    """Main dashboard page."""
+@router.get("/dashboard")
+async def dashboard_data():
+    """Aggregated dashboard stats and data."""
     db = get_db()
     date = today_str()
 
@@ -46,98 +42,55 @@ async def dashboard_page(request: Request):
     if last_report:
         last_report["_id"] = str(last_report["_id"])
 
-    return templates.TemplateResponse(
-        "dashboard.html",
-        {
-            "request": request,
-            "today_updates": today_updates,
-            "active_projects": active_projects,
-            "active_members": active_members,
-            "active_reminders": active_reminders,
-            "recent_updates": recent_updates,
-            "blockers": blockers,
-            "action_items": action_items,
-            "last_report": last_report,
-            "date": date,
-        },
-    )
+    return {
+        "today_updates": today_updates,
+        "active_projects": active_projects,
+        "active_members": active_members,
+        "active_reminders": active_reminders,
+        "recent_updates": recent_updates,
+        "blockers": blockers,
+        "action_items": action_items,
+        "last_report": last_report,
+        "date": date,
+    }
 
 
-@router.get("/chat")
-async def chat_page(request: Request):
-    """Chat-style input page."""
+@router.get("/dashboard/chat")
+async def chat_data():
+    """Today's updates for the chat view."""
     db = get_db()
     date = today_str()
     today_updates = await db.updates.find({"date": date}).sort("created_at", -1).to_list(50)
     for u in today_updates:
         u["_id"] = str(u["_id"])
-    return templates.TemplateResponse(
-        "chat_input.html",
-        {"request": request, "updates": today_updates, "date": date},
-    )
+    return {"updates": today_updates, "date": date}
 
 
-@router.get("/projects-page")
-async def projects_page(request: Request):
-    """Projects management page."""
-    db = get_db()
-    projects = await db.projects.find().sort("name", 1).to_list(None)
-    for p in projects:
-        p["_id"] = str(p["_id"])
-    return templates.TemplateResponse(
-        "projects.html",
-        {"request": request, "projects": projects},
-    )
+@router.get("/settings")
+async def settings_data():
+    """Return app settings (secrets masked)."""
+    def mask(val: str) -> str:
+        if not val:
+            return ""
+        if len(val) <= 8:
+            return "***"
+        return val[:4] + "***" + val[-4:]
 
-
-@router.get("/team-page")
-async def team_page(request: Request):
-    """Team members management page."""
-    db = get_db()
-    members = await db.team_members.find().sort("name", 1).to_list(None)
-    for m in members:
-        m["_id"] = str(m["_id"])
-    projects = await db.projects.find({"status": "active"}).to_list(None)
-    for p in projects:
-        p["_id"] = str(p["_id"])
-    return templates.TemplateResponse(
-        "team.html",
-        {"request": request, "members": members, "projects": projects},
-    )
-
-
-@router.get("/reports-page")
-async def reports_page(request: Request):
-    """Reports history page."""
-    db = get_db()
-    reports = await db.reports.find().sort("created_at", -1).to_list(50)
-    for r in reports:
-        r["_id"] = str(r["_id"])
-    return templates.TemplateResponse(
-        "reports.html",
-        {"request": request, "reports": reports},
-    )
-
-
-@router.get("/reminders-page")
-async def reminders_page(request: Request):
-    """Reminders page."""
-    db = get_db()
-    active = await db.reminders.find({"is_dismissed": False}).sort("trigger_time", -1).to_list(None)
-    dismissed = await db.reminders.find({"is_dismissed": True}).sort("trigger_time", -1).to_list(20)
-    for r in active + dismissed:
-        r["_id"] = str(r["_id"])
-    return templates.TemplateResponse(
-        "reminders.html",
-        {"request": request, "active_reminders": active, "dismissed_reminders": dismissed},
-    )
-
-
-@router.get("/settings-page")
-async def settings_page(request: Request):
-    """Settings page."""
-    from backend.config import settings as app_settings
-    return templates.TemplateResponse(
-        "settings.html",
-        {"request": request, "settings": app_settings},
-    )
+    return {
+        "resend_api_key": mask(settings.resend_api_key),
+        "from_email": settings.from_email,
+        "telegram_bot_token": mask(settings.telegram_bot_token),
+        "telegram_chat_id": settings.telegram_chat_id,
+        "management_telegram_chat_id": settings.management_telegram_chat_id,
+        "timezone": settings.timezone,
+        "daily_brief_time": settings.daily_brief_time,
+        "weekly_report_day": settings.weekly_report_day,
+        "weekly_report_time": settings.weekly_report_time,
+        "reminder_no_update_time": settings.reminder_no_update_time,
+        "management_emails": settings.management_emails,
+        "management_cc_emails": settings.management_cc_emails,
+        "alert_emails": settings.alert_emails,
+        "alert_cc_emails": settings.alert_cc_emails,
+        "app_url": settings.app_url,
+        "gemini_api_key": mask(settings.gemini_api_key),
+    }

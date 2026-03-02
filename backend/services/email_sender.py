@@ -1,6 +1,4 @@
-import aiosmtplib
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
+import resend
 from datetime import datetime
 
 from backend.config import settings
@@ -14,45 +12,33 @@ async def send_email(
     plain_body: str,
     cc_emails: list = None,
 ):
-    """Send an email via SMTP with optional CC."""
-    if not settings.smtp_user or not settings.smtp_password:
-        print("Email not configured - skipping send")
+    """Send an email via Resend API with optional CC."""
+    if not settings.resend_api_key:
+        print("Email not configured (no RESEND_API_KEY) - skipping send")
         return
 
-    msg = MIMEMultipart("alternative")
-    msg["From"] = settings.from_email or settings.smtp_user
-    msg["To"] = ", ".join(to_emails)
-    msg["Subject"] = subject
+    resend.api_key = settings.resend_api_key
+
+    params = {
+        "from": settings.from_email or "PM Update Tool <noreply@resend.dev>",
+        "to": to_emails,
+        "subject": subject,
+        "html": html_body,
+        "text": plain_body,
+    }
 
     if cc_emails:
-        msg["Cc"] = ", ".join(cc_emails)
-
-    msg.attach(MIMEText(plain_body, "plain"))
-    msg.attach(MIMEText(html_body, "html"))
-
-    # All recipients (To + CC) must be in the recipients list for SMTP
-    all_recipients = list(to_emails)
-    if cc_emails:
-        all_recipients.extend(cc_emails)
+        params["cc"] = cc_emails
 
     try:
-        await aiosmtplib.send(
-            msg,
-            hostname=settings.smtp_host,
-            port=settings.smtp_port,
-            start_tls=True,
-            username=settings.smtp_user,
-            password=settings.smtp_password,
-            recipients=all_recipients,
-            timeout=30,  # 30 second timeout
-        )
-        print(f"[email] Successfully sent to {all_recipients}")
+        result = resend.Emails.send(params)
+        all_recipients = list(to_emails) + (cc_emails or [])
+        print(f"[email] Successfully sent to {all_recipients} (id: {result.get('id', 'unknown')})")
     except Exception as e:
         error_type = type(e).__name__
         error_msg = str(e)
-        print(f"[email] SMTP error: {error_type}: {error_msg}")
-        print(f"[email] Config: {settings.smtp_host}:{settings.smtp_port}, user={settings.smtp_user}")
-        raise  # Re-raise so caller can handle it
+        print(f"[email] Resend error: {error_type}: {error_msg}")
+        raise
 
 
 async def send_daily_brief_email(report: dict, to_emails: list):

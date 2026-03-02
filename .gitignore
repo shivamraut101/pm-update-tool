@@ -44,6 +44,6 @@ nul
 # Test files
 test_*.py
 
-# WhatsApp session data
-whatsapp-bridge/.wwebjs_auth/
-whatsapp-bridge/.wwebjs_cache/
+# Frontend (React/Vite)
+frontend/node_modules/
+frontend/dist/

@@ -125,9 +125,9 @@ async def trigger_reminder_check(request: Request):
 
 @router.post("/test-email")
 async def test_email():
-    """Send a test email to verify SMTP configuration works."""
-    if not settings.smtp_user or not settings.smtp_password:
-        raise HTTPException(status_code=400, detail="SMTP not configured. Set SMTP_USER and SMTP_PASSWORD in .env")
+    """Send a test email to verify Resend configuration works."""
+    if not settings.resend_api_key:
+        raise HTTPException(status_code=400, detail="Resend not configured. Set RESEND_API_KEY in .env")
 
     to_emails = settings.get_management_emails_list()
     if not to_emails:
@@ -140,12 +140,12 @@ async def test_email():
             html_body=(
                 '<div style="font-family:sans-serif;padding:20px;">'
                 '<h2 style="color:#4f46e5;">Test Successful!</h2>'
-                '<p>Your SMTP email configuration is working correctly.</p>'
+                '<p>Your Resend email configuration is working correctly.</p>'
                 '<hr style="border-color:#e5e7eb;">'
                 '<small style="color:#9ca3af;">Sent from PM Update Tool</small>'
                 '</div>'
             ),
-            plain_body="Test Successful! Your SMTP email configuration is working correctly.",
+            plain_body="Test Successful! Your Resend email configuration is working correctly.",
         )
         return {"status": "sent", "to": to_emails}
     except Exception as e:

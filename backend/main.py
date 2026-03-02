@@ -1,13 +1,15 @@
 from contextlib import asynccontextmanager
+from pathlib import Path
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
-from fastapi.templating import Jinja2Templates
+from fastapi.responses import FileResponse
+from fastapi.middleware.cors import CORSMiddleware
 import asyncio
 import os
 
 from backend.config import settings
 from backend.database import connect_db, close_db
-from backend.routers import updates, projects, team, reports, reminders, whatsapp, dashboard
+from backend.routers import updates, projects, team, reports, reminders, dashboard
 from backend.routers import telegram as telegram_router
 
 
@@ -58,26 +60,44 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="PM Update Tool",
     description="Project Management Update & Reporting Tool",
-    version="1.0.0",
+    version="2.0.0",
     lifespan=lifespan,
 )
 
-# Mount static files
-static_dir = os.path.join(os.path.dirname(__file__), "..", "frontend", "static")
-app.mount("/static", StaticFiles(directory=static_dir), name="static")
+# CORS — allow Vite dev server in development
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-# Templates
-templates_dir = os.path.join(os.path.dirname(__file__), "..", "frontend", "templates")
-templates = Jinja2Templates(directory=templates_dir)
+# Mount uploads directory for screenshots
+uploads_dir = os.path.join(os.path.dirname(__file__), "..", "uploads")
+os.makedirs(uploads_dir, exist_ok=True)
+app.mount("/uploads", StaticFiles(directory=uploads_dir), name="uploads")
 
-# Include API routers
+# Include API routers (all under /api prefix)
 app.include_router(updates.router, prefix="/api", tags=["Updates"])
 app.include_router(projects.router, prefix="/api", tags=["Projects"])
 app.include_router(team.router, prefix="/api", tags=["Team"])
 app.include_router(reports.router, prefix="/api", tags=["Reports"])
 app.include_router(reminders.router, prefix="/api", tags=["Reminders"])
-app.include_router(whatsapp.router, prefix="/api", tags=["WhatsApp"])
 app.include_router(telegram_router.router, prefix="/api", tags=["Telegram"])
+app.include_router(dashboard.router, prefix="/api", tags=["Dashboard"])
 
-# Include page routers
-app.include_router(dashboard.router, tags=["Pages"])
+# Serve React SPA in production (after `npm run build`)
+frontend_dist = Path(__file__).parent.parent / "frontend" / "dist"
+if frontend_dist.exists():
+    app.mount("/assets", StaticFiles(directory=str(frontend_dist / "assets")), name="assets")
+
+    @app.get("/{path:path}")
+    async def spa_fallback(path: str):
+        """Serve React SPA for all non-API routes."""
+        # Try to serve the exact file first (e.g., favicon.ico, vite.svg)
+        file_path = frontend_dist / path
+        if path and file_path.exists() and file_path.is_file():
+            return FileResponse(str(file_path))
+        # Otherwise serve index.html for client-side routing
+        return FileResponse(str(frontend_dist / "index.html"))

@@ -14,19 +14,13 @@ class Settings(BaseSettings):
     # Google Gemini
     gemini_api_key: str = ""
 
-    # WhatsApp Bridge (whatsapp-web.js)
-    whatsapp_bridge_url: str = "http://localhost:3001"
-
     # Telegram Bot
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""
     management_telegram_chat_id: str = ""  # Management person's chat ID for receiving reports
 
-    # SMTP (Email)
-    smtp_host: str = "smtp.gmail.com"
-    smtp_port: int = 587
-    smtp_user: str = ""
-    smtp_password: str = ""
+    # Email (Resend API)
+    resend_api_key: str = ""
     from_email: str = ""
 
     # App Config
@@ -36,12 +30,8 @@ class Settings(BaseSettings):
     weekly_report_time: str = "18:00"
     reminder_no_update_time: str = "17:00"
 
-    # User's WhatsApp
-    user_whatsapp: str = ""
-
     # Management contacts (comma-separated in .env)
     management_emails: str = ""
-    management_whatsapp: str = ""
     management_cc_emails: str = ""
 
     # Alert emails (sent to the user themselves)
@@ -57,6 +47,7 @@ class Settings(BaseSettings):
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"
+        extra = "ignore"
 
     def get_management_emails_list(self) -> List[str]:
         if not self.management_emails:
@@ -67,11 +58,6 @@ class Settings(BaseSettings):
         if not self.management_cc_emails:
             return []
         return [e.strip() for e in self.management_cc_emails.split(",") if e.strip()]
-
-    def get_management_whatsapp_list(self) -> List[str]:
-        if not self.management_whatsapp:
-            return []
-        return [n.strip() for n in self.management_whatsapp.split(",") if n.strip()]
 
     def get_alert_emails_list(self) -> List[str]:
         if not self.alert_emails:
