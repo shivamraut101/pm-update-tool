@@ -6,6 +6,7 @@ never has to guess. It KNOWS who works where and what they were doing.
 """
 
 import json
+import time
 from datetime import datetime, timedelta
 from difflib import SequenceMatcher
 
@@ -104,6 +105,7 @@ Rules:
     try:
         for model_name in MODELS[:2]:  # Use fast models for extraction
             try:
+                t_model = time.time()
                 model = genai.GenerativeModel(model_name)
                 response = model.generate_content(
                     prompt,
@@ -114,10 +116,10 @@ Rules:
                     ),
                 )
                 extracted = json.loads(response.text)
-                logger.info(f"Entity extraction OK with {model_name}")
+                logger.info(f"Entity extraction OK with {model_name} in {time.time() - t_model:.1f}s")
                 return extracted
             except Exception as e:
-                logger.warning(f"Entity extraction with {model_name} failed: {e}")
+                logger.warning(f"Entity extraction with {model_name} failed after {time.time() - t_model:.1f}s: {e}")
                 continue
     except Exception as e:
         logger.error(f"Entity extraction error: {e}")
@@ -142,14 +144,17 @@ async def parse_update(
         return _fallback_parse(combined_text), 0.0
 
     # Build rich organizational context
+    t_ctx = time.time()
     context = await _build_smart_context(projects, team_members)
 
     prompt = _build_prompt(combined_text, context)
+    logger.info(f"Context built in {time.time() - t_ctx:.1f}s (prompt ~{len(prompt)} chars)")
 
     try:
         last_error = None
         for model_name in MODELS:
             try:
+                t_model = time.time()
                 model = genai.GenerativeModel(
                     model_name,
                     system_instruction=SYSTEM_INSTRUCTION,
@@ -176,18 +181,18 @@ async def parse_update(
                 parsed = _resolve_entities(parsed, projects, team_members)
                 parsed = _validate_assignments(parsed, projects, team_members)
 
-                logger.info(f"Parse OK with {model_name} (confidence: {ai_confidence})")
+                logger.info(f"Parse OK with {model_name} in {time.time() - t_model:.1f}s (confidence: {ai_confidence})")
                 return parsed, ai_confidence
 
             except Exception as e:
                 last_error = e
                 err = str(e)
                 if "429" in err or "quota" in err.lower():
-                    logger.warning(f"{model_name} quota exceeded, trying next...")
+                    logger.warning(f"{model_name} quota exceeded after {time.time() - t_model:.1f}s, trying next...")
                 elif "404" in err or "not found" in err.lower():
-                    logger.warning(f"{model_name} not available, trying next...")
+                    logger.warning(f"{model_name} not available after {time.time() - t_model:.1f}s, trying next...")
                 else:
-                    logger.warning(f"{model_name} error: {e}")
+                    logger.warning(f"{model_name} error after {time.time() - t_model:.1f}s: {e}")
                 continue
 
         logger.error(f"All AI models failed: {last_error}")

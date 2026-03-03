@@ -2,11 +2,14 @@ import { useState } from 'react'
 import { useApi } from '../hooks/useApi'
 import { api } from '../api/client'
 import LoadingSpinner from '../components/LoadingSpinner'
+import ConfirmDialog from '../components/ConfirmDialog'
+import { useToast, ToastContainer } from '../components/Toast'
 
 export default function Reports() {
   const { data, loading, error, refetch } = useApi('/api/reports')
-  const [status, setStatus] = useState({ text: '', type: '' })
   const [expanded, setExpanded] = useState({})
+  const [confirmDialog, setConfirmDialog] = useState({ isOpen: false, reportId: null })
+  const { toasts, toast, dismissToast } = useToast()
 
   if (loading) return <LoadingSpinner />
   if (error) return <div className="text-red-600 p-4">Error: {error}</div>
@@ -14,34 +17,32 @@ export default function Reports() {
   const reports = data || []
 
   async function generateReport(type) {
-    setStatus({ text: `Generating ${type} report...`, type: 'info' })
+    toast.info(`Generating ${type} report...`)
     try {
       const result = await api(`/api/reports/generate/${type}`, { method: 'POST' })
       if (result._id || result.content_html) {
-        setStatus({
-          text: `${type.charAt(0).toUpperCase() + type.slice(1)} report generated!`,
-          type: 'success',
-        })
+        toast.success(`${type.charAt(0).toUpperCase() + type.slice(1)} report generated!`)
         refetch()
       } else if (result.message) {
-        setStatus({ text: result.message, type: 'warning' })
+        toast.warning(result.message)
       }
     } catch (e) {
-      setStatus({ text: `Error: ${e.message}`, type: 'error' })
+      toast.error(e.message)
     }
   }
 
   async function resendReport(id) {
-    if (!confirm('Re-send this report via email and Telegram?')) return
+    setConfirmDialog({ isOpen: false, reportId: null })
     try {
+      toast.info('Re-sending report...')
       const result = await api(`/api/reports/${id}/send`, { method: 'POST' })
       const parts = []
       if (result.email) parts.push(`Email: ${result.email}`)
       if (result.telegram) parts.push(`Telegram: ${result.telegram}`)
-      alert(parts.join('\n') || 'Report sent!')
+      toast.success(parts.join(', ') || 'Report sent successfully!')
       refetch()
     } catch (e) {
-      alert(`Error: ${e.message}`)
+      toast.error(e.message)
     }
   }
 
@@ -49,15 +50,10 @@ export default function Reports() {
     setExpanded((prev) => ({ ...prev, [id]: !prev[id] }))
   }
 
-  const statusColors = {
-    info: 'bg-blue-50 border-blue-200 text-blue-700',
-    success: 'bg-green-50 border-green-200 text-green-700',
-    warning: 'bg-yellow-50 border-yellow-200 text-yellow-700',
-    error: 'bg-red-50 border-red-200 text-red-700',
-  }
-
   return (
     <div className="fade-in max-w-6xl mx-auto">
+      <ToastContainer toasts={toasts} onDismiss={dismissToast} />
+
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-6">
         <h1 className="text-2xl font-bold text-gray-800">Reports</h1>
         <div className="flex flex-wrap gap-2">
@@ -75,12 +71,6 @@ export default function Reports() {
           </button>
         </div>
       </div>
-
-      {status.text && (
-        <div className={`rounded-lg p-3 mb-4 border ${statusColors[status.type]}`}>
-          {status.text}
-        </div>
-      )}
 
       <div className="space-y-4">
         {reports.map((r) => {
@@ -116,7 +106,7 @@ export default function Reports() {
                   <DeliveryBadge label="Email" sent={emailStatus.sent} />
                   <DeliveryBadge label="TG" sent={telegramStatus.sent} />
                   <button
-                    onClick={() => resendReport(r._id)}
+                    onClick={() => setConfirmDialog({ isOpen: true, reportId: r._id })}
                     className="text-indigo-600 hover:text-indigo-800 text-sm font-medium hover:underline transition"
                   >
                     Re-send
@@ -158,11 +148,11 @@ export default function Reports() {
               {/* Expandable content */}
               {expanded[r._id] && (
                 <div className="mt-4 border-t border-gray-200 pt-4">
-                  <div className="bg-gray-50 rounded-lg p-4 overflow-auto max-h-[600px]">
+                  <div className="bg-gray-50 rounded-lg p-4 overflow-y-auto overflow-x-hidden max-h-[600px]">
                     {r.content_html ? (
                       <div
-                        className="prose prose-sm max-w-none [&>*]:max-w-full [&_body]:!max-w-full [&_body]:!mx-0 [&_body]:!p-0"
-                        dangerouslySetInnerHTML={{ __html: r.content_html }}
+                        className="prose prose-sm max-w-none [&>*]:max-w-full [&_body]:!max-w-full [&_body]:!mx-0 [&_body]:!p-0 break-words"
+                        dangerouslySetInnerHTML={{ __html: sanitizeReportHtml(r.content_html) }}
                       />
                     ) : r.content_markdown ? (
                       <pre className="whitespace-pre-wrap break-words text-sm text-gray-700 font-mono bg-white rounded p-3 border border-gray-200 overflow-x-auto">
@@ -204,8 +194,25 @@ export default function Reports() {
           </button>
         </div>
       )}
+
+      <ConfirmDialog
+        isOpen={confirmDialog.isOpen}
+        onConfirm={() => resendReport(confirmDialog.reportId)}
+        onCancel={() => setConfirmDialog({ isOpen: false, reportId: null })}
+        title="Re-send Report"
+        message="Are you sure you want to re-send this report via email and Telegram?"
+      />
     </div>
   )
+}
+
+function sanitizeReportHtml(html) {
+  return html
+    .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
+    .replace(/<!DOCTYPE[^>]*>/gi, '')
+    .replace(/<\/?html[^>]*>/gi, '')
+    .replace(/<head[^>]*>[\s\S]*?<\/head>/gi, '')
+    .replace(/<\/?body[^>]*>/gi, '')
 }
 
 function DeliveryBadge({ label, sent }) {

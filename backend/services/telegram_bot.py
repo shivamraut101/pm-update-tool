@@ -3,6 +3,7 @@ import asyncio
 import os
 import re
 import tempfile
+import time
 from datetime import datetime
 from collections import deque
 
@@ -298,11 +299,22 @@ async def _handle_message(message: dict):
     chat_id = str(message["chat"]["id"])
 
     if _authorized_chat_id and chat_id != _authorized_chat_id:
-        await send_telegram_message(chat_id, "Unauthorized. Your chat ID: " + chat_id)
+        logger.warning(f"Unauthorized access attempt from chat_id={chat_id}")
+        await send_telegram_message(
+            chat_id,
+            "🔒 *Unauthorized Access*\n\n"
+            f"Your Chat ID: `{chat_id}`\n\n"
+            "Ask your admin to authorize this chat ID.",
+        )
         return
 
     text = message.get("text", "") or message.get("caption", "") or ""
+    has_photo = "photo" in message
     lower_text = text.strip().lower()
+
+    # Log incoming message
+    msg_type = "photo" if has_photo else ("command" if lower_text.startswith("/") else "text")
+    logger.info(f"Message from chat={chat_id} type={msg_type}: {text[:100]}")
 
     if lower_text == "/start":
         await _cmd_start(chat_id)
@@ -482,15 +494,21 @@ async def _auto_create_unknown_entities(parsed: dict, db, projects: list, team_m
 
 async def _process_update(chat_id: str, message: dict, text: str):
     # Prevent concurrent update processing from same user
+    if _update_processing_lock.locked():
+        logger.info("Update processing lock busy, waiting...")
     async with _update_processing_lock:
+        t_start = time.time()
+        logger.info(f"Processing update from chat={chat_id}: {text[:100]}")
         await send_telegram_message(chat_id, "Processing your update...")
 
         screenshot_text = ""
         if "photo" in message:
+            t_photo = time.time()
             photo = message["photo"][-1]
             photo_data = await _download_photo(photo["file_id"])
             if photo_data:
                 screenshot_text = await _extract_and_cleanup_screenshot(photo_data)
+            logger.info(f"Screenshot processing took {time.time() - t_photo:.1f}s (extracted={len(screenshot_text)} chars)")
 
         combined_text = text
         if screenshot_text:
@@ -502,17 +520,36 @@ async def _process_update(chat_id: str, message: dict, text: str):
 
         db = get_db()
         date = today_str()
+        t_db = time.time()
         projects = await db.projects.find({"status": "active"}).to_list(None)
         team_members = await db.team_members.find({"is_active": True}).to_list(None)
+        logger.info(f"DB context fetch took {time.time() - t_db:.1f}s ({len(projects)} projects, {len(team_members)} members)")
 
         try:
+            t_ai = time.time()
             parsed, confidence = await parse_update(combined_text, projects, team_members)
+            team_updates = parsed.get("team_updates", [])
+            action_items = parsed.get("action_items", [])
+            blockers = parsed.get("blockers", [])
+            logger.info(
+                f"AI parse took {time.time() - t_ai:.1f}s — "
+                f"confidence={confidence:.2f}, "
+                f"team_updates={len(team_updates)}, "
+                f"action_items={len(action_items)}, "
+                f"blockers={len(blockers)}"
+            )
         except Exception as e:
-            await send_telegram_message(chat_id, f"AI parsing error: {str(e)[:200]}")
+            logger.error(f"AI parsing error after {time.time() - t_start:.1f}s: {e}")
+            await send_telegram_message(
+                chat_id,
+                f"❌ *AI Parsing Error*\n\n{_safe_md(str(e)[:200])}",
+            )
             return
 
         # Auto-create unknown entities and update parsed data with new IDs
         auto_created = await _auto_create_unknown_entities(parsed, db, projects, team_members)
+        if auto_created:
+            logger.info(f"Auto-created entities: {', '.join(auto_created)}")
 
         update_doc = {
             "raw_text": text,
@@ -527,25 +564,24 @@ async def _process_update(chat_id: str, message: dict, text: str):
         }
         await db.updates.insert_one(update_doc)
 
-        ack_parts = ["Got it!"]
-        team_updates = parsed.get("team_updates", [])
+        ack_parts = ["✅ *Update Saved!*"]
         if team_updates:
             names = set(t["team_member_name"] for t in team_updates)
             projects_mentioned = set(t["project_name"] for t in team_updates)
-            ack_parts.append(f"Parsed: {', '.join(names)} on {', '.join(projects_mentioned)}.")
-        action_items = parsed.get("action_items", [])
+            ack_parts.append(f"\n*Team:* {', '.join(names)}")
+            ack_parts.append(f"*Projects:* {', '.join(projects_mentioned)}")
         if action_items:
-            ack_parts.append(f"{len(action_items)} action item(s) noted.")
-        blockers = parsed.get("blockers", [])
+            ack_parts.append(f"*{len(action_items)}* action item(s) noted")
         if blockers:
-            ack_parts.append(f"{len(blockers)} blocker(s) flagged.")
+            ack_parts.append(f"🔴 *{len(blockers)}* blocker(s) flagged")
 
         # Notify about auto-created entities
         if auto_created:
-            ack_parts.append(f"\n\n⚠️ *Auto-created:*\n" + "\n".join(f"- {e}" for e in auto_created))
-            ack_parts.append("\n💡 Add these to your reference database and run /sync for full features.")
+            ack_parts.append(f"\n⚠️ *Auto-created:*\n" + "\n".join(f"  - {e}" for e in auto_created))
+            ack_parts.append("\nAdd these to your reference DB and run /sync.")
 
-        await send_telegram_message(chat_id, " ".join(ack_parts))
+        await send_telegram_message(chat_id, "\n".join(ack_parts))
+        logger.info(f"Update processed in {time.time() - t_start:.1f}s total")
 
 
 # ---------------------------------------------------------------------------
@@ -553,81 +589,106 @@ async def _process_update(chat_id: str, message: dict, text: str):
 # ---------------------------------------------------------------------------
 
 async def _cmd_start(chat_id: str):
+    logger.info(f"Command: /start from chat={chat_id}")
     await send_telegram_message(
         chat_id,
-        "*PM Update Tool Bot*\n\n"
-        "Send me your daily updates naturally. I'll parse them and track everything.\n\n"
+        "*Welcome to PM Update Tool!* 👋\n\n"
+        "Send your daily updates naturally — I'll parse and track everything with AI.\n\n"
         "*Commands:*\n"
-        "/status - Quick counts for today\n"
-        "/today - Detailed view of all parsed updates\n"
-        "/pending - Team members with no updates today\n"
-        "/projects - List all active projects\n"
-        "/team - List all team members\n"
-        "/reminders - Show active reminders\n"
-        "/sync - Re-sync from reference database\n"
-        "/report - Generate & send daily brief NOW\n"
-        "/week - Generate & send weekly report NOW\n"
-        "/undo - Delete your last update\n"
-        "/help - Show commands\n\n"
-        "Just type your updates, e.g.:\n"
-        "Yash fixed the login bug on B2B Portal. Shobhit pushed API docs PR.\n\n"
-        f"Your chat ID: `{chat_id}`",
+        "├ /status — Today's overview\n"
+        "├ /today — Detailed parsed updates\n"
+        "├ /pending — Who's missing updates\n"
+        "├ /projects — Active projects\n"
+        "├ /team — Team members\n"
+        "├ /reminders — Active reminders\n"
+        "├ /report — Generate daily brief\n"
+        "├ /week — Generate weekly report\n"
+        "├ /sync — Sync reference DB\n"
+        "├ /undo — Delete last update\n"
+        "└ /help — All commands\n\n"
+        "*Example:*\n"
+        "_Yash fixed the login bug on B2B Portal. Shobhit pushed API docs PR._\n\n"
+        f"Your Chat ID: `{chat_id}`",
     )
 
 
 async def _cmd_help(chat_id: str):
+    logger.info(f"Command: /help from chat={chat_id}")
     await send_telegram_message(
         chat_id,
-        "*PM Update Tool - Commands:*\n\n"
-        "*Input:*\n"
-        "- Type your update naturally\n"
-        "- Send screenshots of chats/boards\n\n"
-        "*Review:*\n"
-        "/status - Quick counts (updates, activities, blockers)\n"
-        "/today - Detailed parsed updates (who did what)\n"
-        "/pending - Team members missing from today's updates\n"
-        "/projects - List all active projects\n"
-        "/team - List all team members\n"
-        "/reminders - Show active reminders\n\n"
-        "*Actions:*\n"
-        "/report - Generate & send daily brief to management\n"
-        "/week - Generate & send weekly report to management\n"
-        "/sync - Re-sync projects & team from reference DB\n"
-        "/undo - Delete your last submitted update",
+        "*PM Update Tool — Commands*\n\n"
+        "*Input*\n"
+        "  Send text updates or screenshots — I'll parse them.\n\n"
+        "*Review*\n"
+        "├ /status — Quick counts for today\n"
+        "├ /today — Detailed view (who did what)\n"
+        "├ /pending — Team members with no updates\n"
+        "├ /projects — All active projects\n"
+        "├ /team — All team members\n"
+        "└ /reminders — Active reminders\n\n"
+        "*Actions*\n"
+        "├ /report — Generate & send daily brief\n"
+        "├ /week — Generate & send weekly report\n"
+        "├ /sync — Re-sync from reference DB\n"
+        "└ /undo — Delete last submitted update",
     )
 
 
 async def _cmd_status(chat_id: str):
+    logger.info(f"Command: /status from chat={chat_id}")
     db = get_db()
     date = today_str()
     count = await db.updates.count_documents({"date": date})
     if count == 0:
-        await send_telegram_message(chat_id, "No updates submitted today yet.")
+        await send_telegram_message(
+            chat_id,
+            "*No updates yet today.*\n\n"
+            "Send me an update to get started!",
+        )
         return
     updates = await db.updates.find({"date": date}).to_list(None)
     total_team = sum(len(u.get("parsed", {}).get("team_updates", [])) for u in updates)
     total_actions = sum(len(u.get("parsed", {}).get("action_items", [])) for u in updates)
     total_blockers = sum(len(u.get("parsed", {}).get("blockers", [])) for u in updates)
+    blocker_icon = "🔴" if total_blockers > 0 else "✅"
     await send_telegram_message(
         chat_id,
-        f"*Today's summary:*\n"
-        f"- {count} update(s) submitted\n"
-        f"- {total_team} team activities\n"
-        f"- {total_actions} action item(s)\n"
-        f"- {total_blockers} blocker(s)",
+        f"*Today's Status — {date}*\n\n"
+        f"  *{count}* update(s) submitted\n"
+        f"  *{total_team}* team activities\n"
+        f"  *{total_actions}* action item(s)\n"
+        f"{blocker_icon} *{total_blockers}* blocker(s)",
     )
 
 
 async def _cmd_today(chat_id: str):
+    logger.info(f"Command: /today from chat={chat_id}")
     db = get_db()
     date = today_str()
     updates = await db.updates.find({"date": date}).to_list(None)
 
     if not updates:
-        await send_telegram_message(chat_id, "No updates submitted today yet.")
+        await send_telegram_message(
+            chat_id,
+            "*No updates yet today.*\n\n"
+            "Send me an update to get started!",
+        )
         return
 
-    lines = [f"*Today's Updates ({date}):*\n"]
+    status_icons = {
+        "completed": "✅",
+        "in_progress": "🔄",
+        "blocked": "🚫",
+        "not_started": "⏳",
+    }
+
+    priority_icons = {
+        "high": "🔴",
+        "medium": "🟡",
+        "low": "🟢",
+    }
+
+    lines = [f"*Today's Updates — {date}*"]
     from collections import defaultdict
     by_project = defaultdict(list)
 
@@ -653,8 +714,9 @@ async def _cmd_today(chat_id: str):
             for tu in tus:
                 name = _safe_md(tu.get("team_member_name", "?"))
                 summary = _safe_md(tu.get("summary", ""))
-                status = tu.get("status", "").upper()
-                lines.append(f"  - {name}: {summary} [{status}]")
+                status = tu.get("status", "")
+                icon = status_icons.get(status, "▪️")
+                lines.append(f"  {icon} *{name}*: {summary}")
 
     # Deduplicate action items
     all_actions = []
@@ -668,11 +730,12 @@ async def _cmd_today(chat_id: str):
                 all_actions.append(ai)
 
     if all_actions:
-        lines.append(f"\n*Action Items ({len(all_actions)}):*")
+        lines.append(f"\n*Action Items ({len(all_actions)})*")
         for ai in all_actions:
             desc = _safe_md(ai.get("description", ""))
             assigned = _safe_md(ai.get("assigned_to", "self"))
-            lines.append(f"  - [{ai.get('priority', 'medium').upper()}] {desc} -> {assigned}")
+            icon = priority_icons.get(ai.get("priority", "medium"), "🟡")
+            lines.append(f"  {icon} {desc} → _{assigned}_")
 
     # Deduplicate blockers
     all_blockers = []
@@ -686,16 +749,19 @@ async def _cmd_today(chat_id: str):
                 all_blockers.append(b)
 
     if all_blockers:
-        lines.append(f"\n*Blockers ({len(all_blockers)}):*")
+        lines.append(f"\n*Blockers ({len(all_blockers)})*")
         for b in all_blockers:
             proj = _safe_md(b.get("project_name", ""))
             desc = _safe_md(b.get("description", ""))
-            lines.append(f"  - [{b.get('severity', 'medium').upper()}] {proj}: {desc}")
+            severity = b.get("severity", "medium")
+            icon = priority_icons.get(severity, "🟡")
+            lines.append(f"  {icon} *{proj}*: {desc}")
 
     await send_telegram_message(chat_id, "\n".join(lines))
 
 
 async def _cmd_pending(chat_id: str):
+    logger.info(f"Command: /pending from chat={chat_id}")
     db = get_db()
     date = today_str()
     all_members = await db.team_members.find({"is_active": True}).to_list(None)
@@ -717,37 +783,53 @@ async def _cmd_pending(chat_id: str):
         else:
             missing.append(m["name"])
 
-    lines = [f"*Team Coverage for {date}:*\n"]
+    total = len(all_members)
+    coverage_pct = int(len(covered) / total * 100) if total > 0 else 0
+
+    lines = [
+        f"*Team Coverage — {date}*",
+        f"\n*{coverage_pct}%* covered ({len(covered)}/{total} members)",
+    ]
+
     if covered:
-        lines.append(f"*Covered ({len(covered)}):*")
+        lines.append(f"\n✅ *Updated ({len(covered)})*")
         for name in sorted(covered):
-            lines.append(f"  + {_safe_md(name)}")
+            lines.append(f"  - {_safe_md(name)}")
     if missing:
-        lines.append(f"\n*Missing ({len(missing)}):*")
+        lines.append(f"\n⏳ *Pending ({len(missing)})*")
         for name in sorted(missing):
             lines.append(f"  - {_safe_md(name)}")
     else:
-        lines.append("\nAll team members covered!")
+        lines.append(f"\n*All team members have reported today!*")
 
     await send_telegram_message(chat_id, "\n".join(lines))
 
 
 async def _cmd_projects(chat_id: str):
+    logger.info(f"Command: /projects from chat={chat_id}")
     db = get_db()
     projects = await db.projects.find({"status": "active"}).to_list(None)
 
     if not projects:
-        await send_telegram_message(chat_id, "No active projects found.")
+        await send_telegram_message(
+            chat_id,
+            "*No active projects found.*\n\n"
+            "Add projects via the web dashboard or reference DB, then run /sync.",
+        )
         return
 
-    lines = [f"*Active Projects ({len(projects)}):*\n"]
+    lines = [f"*Active Projects ({len(projects)})*"]
     for p in sorted(projects, key=lambda x: x.get("name", "")):
         name = _safe_md(p.get("name", "Unknown"))
         code = p.get("code", "")
         health = p.get("health", "unknown")
         members = len(p.get("team_member_ids", []))
         health_icon = {"on_track": "🟢", "at_risk": "🟡", "off_track": "🔴"}.get(health, "⚪")
-        lines.append(f"{health_icon} *{name}* [{code}] - {members} member(s)")
+        auto_tag = " _(auto)_" if p.get("auto_created") else ""
+        lines.append(f"\n{health_icon} *{name}* `[{code}]`{auto_tag}")
+        lines.append(f"    {members} member(s)")
+        if p.get("client_name"):
+            lines.append(f"    Client: {_safe_md(p['client_name'])}")
         if p.get("tech_stack"):
             lines.append(f"    Tech: {', '.join(p['tech_stack'])}")
 
@@ -755,45 +837,57 @@ async def _cmd_projects(chat_id: str):
 
 
 async def _cmd_team(chat_id: str):
+    logger.info(f"Command: /team from chat={chat_id}")
     db = get_db()
     members = await db.team_members.find({"is_active": True}).to_list(None)
 
     if not members:
-        await send_telegram_message(chat_id, "No active team members found.")
+        await send_telegram_message(
+            chat_id,
+            "*No active team members found.*\n\n"
+            "Add team members via the web dashboard or reference DB, then run /sync.",
+        )
         return
 
-    lines = [f"*Team Members ({len(members)}):*\n"]
+    lines = [f"*Team Members ({len(members)})*"]
     for m in sorted(members, key=lambda x: x.get("name", "")):
         name = _safe_md(m.get("name", "Unknown"))
         role = m.get("role", "")
         project_count = len(m.get("project_ids", []))
-        lines.append(f"- *{name}* ({role}) - {project_count} project(s)")
+        auto_tag = " _(auto)_" if m.get("auto_created") else ""
+        role_str = f" — {role}" if role else ""
+        lines.append(f"\n*{name}*{auto_tag}{role_str}")
+        lines.append(f"    {project_count} project(s)")
 
     await send_telegram_message(chat_id, "\n".join(lines))
 
 
 async def _cmd_reminders(chat_id: str):
+    logger.info(f"Command: /reminders from chat={chat_id}")
     db = get_db()
     reminders = await db.reminders.find({"is_dismissed": False}).to_list(None)
 
     if not reminders:
-        await send_telegram_message(chat_id, "No active reminders. All caught up!")
+        await send_telegram_message(chat_id, "*No active reminders.* All caught up!")
         return
 
     priority_icon = {"high": "🔴", "medium": "🟡", "low": "🟢"}
-    lines = [f"*Active Reminders ({len(reminders)}):*\n"]
+    lines = [f"*Active Reminders ({len(reminders)})*"]
     for r in reminders:
         icon = priority_icon.get(r.get("priority", "medium"), "⚪")
         rtype = r.get("type", "").replace("_", " ").title()
         msg = _safe_md(r.get("message", ""))
-        lines.append(f"{icon} [{rtype}] {msg}")
+        lines.append(f"\n{icon} *{rtype}*")
+        lines.append(f"    {msg}")
 
     await send_telegram_message(chat_id, "\n".join(lines))
 
 
 async def _cmd_sync(chat_id: str):
+    logger.info(f"Command: /sync from chat={chat_id}")
     # Prevent concurrent sync operations
     if _sync_lock.locked():
+        logger.warning("Sync already running, rejecting request")
         await send_telegram_message(chat_id, "A sync operation is already running. Please wait...")
         return
 
@@ -810,18 +904,23 @@ async def _cmd_sync(chat_id: str):
 
             await send_telegram_message(
                 chat_id,
-                f"*Sync complete!*\n\n"
-                f"- {members} team member(s)\n"
-                f"- {projects} active project(s)\n"
-                f"- {clients} client(s)",
+                f"✅ *Sync Complete*\n\n"
+                f"  *{members}* team member(s)\n"
+                f"  *{projects}* active project(s)\n"
+                f"  *{clients}* client(s)",
             )
         except Exception as e:
-            await send_telegram_message(chat_id, f"Sync failed: {str(e)[:200]}")
+            await send_telegram_message(
+                chat_id,
+                f"❌ *Sync Failed*\n\n{_safe_md(str(e)[:200])}",
+            )
 
 
 async def _cmd_report(chat_id: str):
+    logger.info(f"Command: /report from chat={chat_id}")
     # Prevent concurrent report generation
     if _report_lock.locked():
+        logger.warning("Daily report already generating, rejecting request")
         await send_telegram_message(chat_id, "A daily brief is already being generated. Please wait...")
         return
 
@@ -834,11 +933,18 @@ async def _cmd_report(chat_id: str):
             report = await generate_daily_brief(today_str())
         except Exception as e:
             logger.error(f"Report generation error: {e}")
-            await send_telegram_message(chat_id, f"Report generation failed: {str(e)[:200]}")
+            await send_telegram_message(
+                chat_id,
+                f"❌ *Report Generation Failed*\n\n{_safe_md(str(e)[:200])}",
+            )
             return
 
         if not report:
-            await send_telegram_message(chat_id, "No updates today — nothing to generate.")
+            await send_telegram_message(
+                chat_id,
+                "*No updates today* — nothing to generate.\n\n"
+                "Send some updates first, then try again.",
+            )
             return
 
         results = []
@@ -855,25 +961,28 @@ async def _cmd_report(chat_id: str):
         if mgmt_chat_id:
             try:
                 plain = report.get("content_plain") or report.get("content_markdown", "")
-                await send_telegram_message(mgmt_chat_id, f"*Daily Brief - {today_str()}*\n\n{plain}")
+                await send_telegram_message(mgmt_chat_id, f"*Daily Brief — {today_str()}*\n\n{plain}")
                 results.append(f"Telegram sent to management")
             except Exception as e:
-                results.append(f"Telegram (mgmt) failed: {str(e)[:100]}")
+                results.append(f"Telegram failed: {str(e)[:100]}")
 
-        lines = ["*Daily brief generated & sent!*\n"] + [f"- {r}" for r in results]
+        lines = [f"✅ *Daily Brief Generated*\n"]
+        lines.extend(f"  - {r}" for r in results)
         if not results:
-            lines.append("- Report saved but no delivery channels configured")
+            lines.append("No delivery channels configured. Set up email or Telegram in settings.")
         await send_telegram_message(chat_id, "\n".join(lines))
 
 
 async def _cmd_week(chat_id: str):
+    logger.info(f"Command: /week from chat={chat_id}")
     # Prevent concurrent weekly report generation
     if _weekly_lock.locked():
+        logger.warning("Weekly report already generating, rejecting request")
         await send_telegram_message(chat_id, "A weekly report is already being generated. Please wait...")
         return
 
     async with _weekly_lock:
-        await send_telegram_message(chat_id, "Generating weekly report (using Pro AI)...")
+        await send_telegram_message(chat_id, "Generating weekly report...")
         from backend.services.report_generator import generate_weekly_report
         from backend.services.email_sender import send_weekly_report_email
         from backend.utils.date_helpers import week_boundaries
@@ -883,11 +992,18 @@ async def _cmd_week(chat_id: str):
             report = await generate_weekly_report(week_end)
         except Exception as e:
             logger.error(f"Weekly report generation error: {e}")
-            await send_telegram_message(chat_id, f"Weekly report generation failed: {str(e)[:200]}")
+            await send_telegram_message(
+                chat_id,
+                f"❌ *Weekly Report Failed*\n\n{_safe_md(str(e)[:200])}",
+            )
             return
 
         if not report:
-            await send_telegram_message(chat_id, "No daily reports this week — nothing to synthesize.")
+            await send_telegram_message(
+                chat_id,
+                "*No daily reports this week* — nothing to synthesize.\n\n"
+                "Generate daily briefs first, then try the weekly report.",
+            )
             return
 
         results = []
@@ -907,17 +1023,20 @@ async def _cmd_week(chat_id: str):
                 await send_telegram_message(mgmt_chat_id, f"*Weekly Report*\n\n{plain}")
                 results.append(f"Telegram sent to management")
             except Exception as e:
-                results.append(f"Telegram (mgmt) failed: {str(e)[:100]}")
+                results.append(f"Telegram failed: {str(e)[:100]}")
 
-        lines = ["*Weekly report generated & sent!*\n"] + [f"- {r}" for r in results]
+        lines = [f"✅ *Weekly Report Generated*\n"]
+        lines.extend(f"  - {r}" for r in results)
         if not results:
-            lines.append("- Report saved but no delivery channels configured")
+            lines.append("No delivery channels configured. Set up email or Telegram in settings.")
         await send_telegram_message(chat_id, "\n".join(lines))
 
 
 async def _cmd_undo(chat_id: str):
+    logger.info(f"Command: /undo from chat={chat_id}")
     # Prevent concurrent undo operations
     if _undo_lock.locked():
+        logger.warning("Undo already running, rejecting request")
         await send_telegram_message(chat_id, "An undo operation is already running. Please wait...")
         return
 
@@ -929,7 +1048,7 @@ async def _cmd_undo(chat_id: str):
             sort=[("created_at", -1)],
         )
         if not last_update:
-            await send_telegram_message(chat_id, "No updates today to undo.")
+            await send_telegram_message(chat_id, "*Nothing to undo.* No updates submitted today.")
             return
 
         raw = last_update.get("raw_text", "")[:100]
@@ -938,5 +1057,7 @@ async def _cmd_undo(chat_id: str):
         await db.updates.delete_one({"_id": last_update["_id"]})
         await send_telegram_message(
             chat_id,
-            f"*Deleted last update:*\n{preview}\n\nSend /today to review remaining updates.",
+            f"✅ *Update Deleted*\n\n"
+            f"_{preview}_\n\n"
+            f"Send /today to review remaining updates.",
         )
