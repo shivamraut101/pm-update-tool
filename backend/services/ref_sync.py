@@ -5,15 +5,18 @@ from motor.motor_asyncio import AsyncIOMotorClient
 
 from backend.config import settings
 from backend.database import get_db
+from backend.utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 async def sync_from_reference_db():
     """Pull latest data from reference DB into PM tool DB."""
     if not settings.ref_mongodb_uri:
-        print("[ref_sync] REF_MONGODB_URI not configured - skipping sync.")
+        logger.warning("REF_MONGODB_URI not configured - skipping sync.")
         return
 
-    print("[ref_sync] Starting sync from reference database...")
+    logger.info("Starting sync from reference database...")
 
     kwargs = {}
     if settings.ref_mongodb_uri.startswith("mongodb+srv"):
@@ -28,7 +31,7 @@ async def sync_from_reference_db():
         ref_users = await ref_db.users.find().to_list(None)
         user_id_map = {}
 
-        await pm_db.team_members.delete_many({})
+        # UPSERT strategy: Update existing ref_id matches, insert new ones
         for user in ref_users:
             name = user.get("name", "Unknown")
             first_name = name.split()[0] if name else "Unknown"
@@ -51,18 +54,27 @@ async def sync_from_reference_db():
                 "email": email,
                 "project_ids": [],
                 "is_active": True,
+                "auto_created": False,  # Mark as synced from reference
+                "needs_reference_sync": False,
                 "ref_id": str(user["_id"]),
                 "created_at": user.get("createdAt", datetime.now(UTC)),
             }
-            result = await pm_db.team_members.insert_one(doc)
-            user_id_map[str(user["_id"])] = str(result.inserted_id)
 
-        print(f"[ref_sync] Synced {len(ref_users)} team members.")
+            # Upsert by ref_id (update if exists, insert if not)
+            result = await pm_db.team_members.find_one_and_update(
+                {"ref_id": str(user["_id"])},
+                {"$set": doc},
+                upsert=True,
+                return_document=True,
+            )
+            user_id_map[str(user["_id"])] = str(result["_id"])
+
+        logger.info(f"Synced {len(ref_users)} team members.")
 
         # ---- Sync Projects ----
         ref_projects = await ref_db.projects.find().to_list(None)
 
-        await pm_db.projects.delete_many({})
+        # UPSERT strategy: Update existing ref_id matches, insert new ones
         for proj in ref_projects:
             name = proj.get("name", "Unknown")
             team_ids = []
@@ -87,18 +99,27 @@ async def sync_from_reference_db():
                 "tech_stack": proj.get("techStack", []),
                 "repository_url": proj.get("repositoryUrl", ""),
                 "team_member_ids": team_ids,
+                "auto_created": False,  # Mark as synced from reference
+                "needs_reference_sync": False,
                 "ref_id": str(proj["_id"]),
                 "created_at": proj.get("createdAt", datetime.now(UTC)),
                 "updated_at": proj.get("updatedAt", datetime.now(UTC)),
             }
-            await pm_db.projects.insert_one(doc)
 
-        print(f"[ref_sync] Synced {len(ref_projects)} projects.")
+            # Upsert by ref_id (update if exists, insert if not)
+            await pm_db.projects.find_one_and_update(
+                {"ref_id": str(proj["_id"])},
+                {"$set": doc},
+                upsert=True,
+                return_document=True,
+            )
+
+        logger.info(f"Synced {len(ref_projects)} projects.")
 
         # ---- Sync Clients ----
         ref_clients = await ref_db.clients.find().to_list(None)
 
-        await pm_db.clients.delete_many({})
+        # UPSERT strategy: Update existing ref_id matches, insert new ones
         for cl in ref_clients:
             doc = {
                 "name": cl.get("name", "Unknown"),
@@ -108,12 +129,22 @@ async def sync_from_reference_db():
                 "status": cl.get("status", "active"),
                 "type": cl.get("type", "company"),
                 "notes": cl.get("notes", ""),
+                "project_ids": [],  # Initialize empty, will be linked via projects
+                "contact_email": cl.get("email", ""),  # Map to contact_email for consistency
+                "auto_created": False,  # Mark as synced from reference
                 "ref_id": str(cl["_id"]),
                 "created_at": cl.get("createdAt", datetime.now(UTC)),
             }
-            await pm_db.clients.insert_one(doc)
 
-        print(f"[ref_sync] Synced {len(ref_clients)} clients.")
+            # Upsert by ref_id (update if exists, insert if not)
+            await pm_db.clients.find_one_and_update(
+                {"ref_id": str(cl["_id"])},
+                {"$set": doc},
+                upsert=True,
+                return_document=True,
+            )
+
+        logger.info(f"Synced {len(ref_clients)} clients.")
 
         # ---- Update team member project_ids ----
         from bson import ObjectId
@@ -137,9 +168,9 @@ async def sync_from_reference_db():
                 "updated_at": datetime.now(UTC),
             })
 
-        print("[ref_sync] Sync complete!")
+        logger.info("Sync complete!")
 
     except Exception as e:
-        print(f"[ref_sync] Error during sync: {e}")
+        logger.error(f"Error during sync: {e}")
     finally:
         ref_client.close()

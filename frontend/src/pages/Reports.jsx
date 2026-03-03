@@ -157,12 +157,15 @@ export default function Reports() {
 
               {/* Expandable content */}
               {expanded[r._id] && (
-                <div className="mt-4 border-t border-gray-200 pt-4">
-                  <div className="prose prose-sm max-w-none bg-gray-50 rounded-lg p-4">
+                <div className="mt-4 border-t border-gray-200 pt-4 overflow-hidden">
+                  <div className="prose prose-sm max-w-full bg-gray-50 rounded-lg p-4 overflow-x-auto">
                     {r.content_html ? (
-                      <div dangerouslySetInnerHTML={{ __html: r.content_html }} />
+                      <div
+                        className="break-words overflow-x-auto"
+                        dangerouslySetInnerHTML={{ __html: r.content_html }}
+                      />
                     ) : r.content_markdown ? (
-                      <pre className="whitespace-pre-wrap text-sm text-gray-700 font-mono bg-white rounded p-3 border border-gray-200">
+                      <pre className="whitespace-pre-wrap break-words text-sm text-gray-700 font-mono bg-white rounded p-3 border border-gray-200 overflow-x-auto max-w-full">
                         {r.content_markdown}
                       </pre>
                     ) : (

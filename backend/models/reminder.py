@@ -23,6 +23,9 @@ class ReminderResponse(BaseModel):
     is_dismissed: bool
     is_sent: bool
     sent_via: Optional[str]
+    last_alerted_at: Optional[datetime] = None
+    dismissed_at: Optional[datetime] = None
+    dismissed_reason: Optional[str] = None
     created_at: datetime
 
     class Config:

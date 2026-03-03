@@ -25,9 +25,12 @@ class ProjectResponse(BaseModel):
     name: str
     code: str
     client_name: str
+    client_id: Optional[str] = None
     description: str
     status: str
     team_member_ids: List[str] = []
+    auto_created: bool = False
+    needs_reference_sync: bool = False
     created_at: datetime
     updated_at: datetime
 

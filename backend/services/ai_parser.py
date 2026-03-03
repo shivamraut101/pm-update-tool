@@ -13,6 +13,9 @@ import google.generativeai as genai
 
 from backend.config import settings
 from backend.database import get_db
+from backend.utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -39,7 +42,87 @@ CRITICAL RULES — follow these EXACTLY:
 7. You extract percentages: "80% done", "almost done" = ~90%, "half done" = ~50%, "just started" = ~10%
 8. You detect ALL implicit action items and blockers — even if not stated directly.
 9. You NEVER guess. If you truly cannot determine something, say so in general_notes with confidence < 0.7.
-10. For team_member_name and project_name, you MUST return the EXACT full name as listed in KNOWN TEAM MEMBERS / KNOWN PROJECTS."""
+10. For team_member_name and project_name, you MUST return the EXACT full name as listed in KNOWN TEAM MEMBERS / KNOWN PROJECTS.
+11. If a project/client/member is mentioned that is NOT in the known lists, still include it — the system will handle auto-creation."""
+
+
+# ---------------------------------------------------------------------------
+# AI Entity Extraction (pre-parsing for unknown entities)
+# ---------------------------------------------------------------------------
+
+async def extract_entities_with_ai(text: str) -> dict:
+    """Use Gemini to extract ALL mentioned entities with confidence scores.
+
+    This runs BEFORE main parsing to identify potential unknowns.
+    """
+    if not settings.gemini_api_key:
+        return {"projects": [], "team_members": [], "clients": []}
+
+    prompt = f"""Extract ALL entity mentions from this project update text.
+
+TEXT: {text}
+
+Return JSON with all projects, team members, and clients mentioned:
+{{
+  "projects": [
+    {{
+      "mentioned_name": "exact text from update (e.g., 'NewClient Mobile')",
+      "normalized_name": "normalized name (e.g., 'NewClient Mobile')",
+      "confidence": 0.95
+    }}
+  ],
+  "team_members": [
+    {{
+      "mentioned_name": "exact text",
+      "normalized_name": "Proper Name Case",
+      "confidence": 0.90
+    }}
+  ],
+  "clients": [
+    {{
+      "mentioned_name": "exact text",
+      "normalized_name": "Client Name",
+      "confidence": 0.85
+    }}
+  ]
+}}
+
+Confidence scoring:
+- 0.95+: Explicitly named (e.g., "working on Project X")
+- 0.8-0.95: Strongly inferred from context
+- 0.7-0.8: Weak inference
+- <0.7: Ambiguous (skip)
+
+Rules:
+1. Include EVERY entity mentioned or strongly implied
+2. Normalize names to proper case
+3. For abbreviated names, expand if obvious (e.g., "PX" if context suggests "Project X")
+4. Extract client names from phrases like "NewClient called", "feedback from ABC Corp"
+5. Return empty arrays if no entities found
+"""
+
+    try:
+        for model_name in MODELS[:2]:  # Use fast models for extraction
+            try:
+                model = genai.GenerativeModel(model_name)
+                response = model.generate_content(
+                    prompt,
+                    generation_config=genai.GenerationConfig(
+                        response_mime_type="application/json",
+                        temperature=0.2,
+                        max_output_tokens=500,
+                    ),
+                )
+                extracted = json.loads(response.text)
+                logger.info(f"Entity extraction OK with {model_name}")
+                return extracted
+            except Exception as e:
+                logger.warning(f"Entity extraction with {model_name} failed: {e}")
+                continue
+    except Exception as e:
+        logger.error(f"Entity extraction error: {e}")
+
+    return {"projects": [], "team_members": [], "clients": []}
 
 
 # ---------------------------------------------------------------------------
@@ -86,32 +169,32 @@ async def parse_update(
                     ai_confidence = parsed["confidence"].get("overall", 0.9)
                     reason = parsed["confidence"].get("reasoning", "")
                     if reason:
-                        print(f"[ai] confidence: {ai_confidence} — {reason}")
+                        logger.info(f"AI confidence: {ai_confidence} — {reason}")
                     del parsed["confidence"]
 
                 # Post-processing: resolve IDs + validate
                 parsed = _resolve_entities(parsed, projects, team_members)
                 parsed = _validate_assignments(parsed, projects, team_members)
 
-                print(f"[ai] parse OK with {model_name} (confidence: {ai_confidence})")
+                logger.info(f"Parse OK with {model_name} (confidence: {ai_confidence})")
                 return parsed, ai_confidence
 
             except Exception as e:
                 last_error = e
                 err = str(e)
                 if "429" in err or "quota" in err.lower():
-                    print(f"[ai] {model_name} quota exceeded, trying next...")
+                    logger.warning(f"{model_name} quota exceeded, trying next...")
                 elif "404" in err or "not found" in err.lower():
-                    print(f"[ai] {model_name} not available, trying next...")
+                    logger.warning(f"{model_name} not available, trying next...")
                 else:
-                    print(f"[ai] {model_name} error: {e}")
+                    logger.warning(f"{model_name} error: {e}")
                 continue
 
-        print(f"[ai] all models failed: {last_error}")
+        logger.error(f"All AI models failed: {last_error}")
         return _fallback_parse(combined_text), 0.0
 
     except Exception as e:
-        print(f"[ai] parse error: {e}")
+        logger.error(f"Parse error: {e}")
         return _fallback_parse(combined_text), 0.0
 
 
@@ -372,6 +455,88 @@ def _fuzzy_match(name: str, lookup: dict, threshold: float = 0.75) -> str | None
     return best_id
 
 
+# ---------------------------------------------------------------------------
+# Multi-Strategy Matching (enhanced entity resolution)
+# ---------------------------------------------------------------------------
+
+def _exact_match(mentioned: str, entities: list, lookup_field: str = "name") -> dict | None:
+    """Case-insensitive exact match."""
+    mentioned_lower = mentioned.lower().strip()
+    for entity in entities:
+        if entity.get(lookup_field, "").lower() == mentioned_lower:
+            return {"id": str(entity["_id"]), "confidence": 1.0, "matched_name": entity[lookup_field]}
+    return None
+
+
+def _alias_match(mentioned: str, entities: list) -> dict | None:
+    """Match against aliases, nicknames, or codes."""
+    mentioned_lower = mentioned.lower().strip()
+    for entity in entities:
+        # Check aliases (team members)
+        if "aliases" in entity:
+            for alias in entity.get("aliases", []):
+                if alias.lower() == mentioned_lower:
+                    return {"id": str(entity["_id"]), "confidence": 0.95, "matched_name": entity["name"]}
+        # Check nickname (team members)
+        if "nickname" in entity and entity.get("nickname", "").lower() == mentioned_lower:
+            return {"id": str(entity["_id"]), "confidence": 0.95, "matched_name": entity["name"]}
+        # Check code (projects)
+        if "code" in entity and entity.get("code", "").lower() == mentioned_lower:
+            return {"id": str(entity["_id"]), "confidence": 0.95, "matched_name": entity["name"]}
+    return None
+
+
+def _abbreviation_match(mentioned: str, entities: list, lookup_field: str = "name") -> dict | None:
+    """Match partial/abbreviated names (e.g., 'NewCl' → 'NewClient')."""
+    mentioned_lower = mentioned.lower().strip()
+    if len(mentioned_lower) < 3:
+        return None  # Too short to be meaningful
+
+    for entity in entities:
+        entity_name = entity.get(lookup_field, "").lower()
+        # Check if mentioned is a prefix of entity name
+        if entity_name.startswith(mentioned_lower):
+            return {"id": str(entity["_id"]), "confidence": 0.85, "matched_name": entity[lookup_field]}
+    return None
+
+
+def _intelligent_match(mentioned: str, entities: list, entity_type: str = "project") -> dict | None:
+    """Multi-strategy matching orchestrator.
+
+    Tries strategies in order until a match is found.
+    Returns: {"id": str, "confidence": float, "matched_name": str, "strategy": str} or None
+    """
+    lookup_field = "name"
+
+    # Strategy 1: Exact match
+    result = _exact_match(mentioned, entities, lookup_field)
+    if result:
+        return {**result, "strategy": "exact"}
+
+    # Strategy 2: Alias/nickname/code match
+    result = _alias_match(mentioned, entities)
+    if result:
+        return {**result, "strategy": "alias"}
+
+    # Strategy 3: Fuzzy match (typo tolerance)
+    # Build simple lookup map for fuzzy matching
+    lookup_map = {e.get(lookup_field, "").lower(): str(e["_id"]) for e in entities if e.get(lookup_field)}
+    fuzzy_id = _fuzzy_match(mentioned, lookup_map, threshold=0.75)
+    if fuzzy_id:
+        # Find matched entity name
+        for e in entities:
+            if str(e["_id"]) == fuzzy_id:
+                return {"id": fuzzy_id, "confidence": 0.80, "matched_name": e[lookup_field], "strategy": "fuzzy"}
+
+    # Strategy 4: Abbreviation match
+    result = _abbreviation_match(mentioned, entities, lookup_field)
+    if result:
+        return {**result, "strategy": "abbreviation"}
+
+    # No match found
+    return None
+
+
 def _resolve_entities(parsed: dict, projects: list, team_members: list) -> dict:
     """Map parsed names to database IDs using exact + fuzzy matching."""
     # Build lookup maps
@@ -451,7 +616,7 @@ def _validate_assignments(parsed: dict, projects: list, team_members: list) -> d
         parsed["general_notes"] = (
             existing_notes + "\n\nASSIGNMENT WARNINGS:\n" + "\n".join(f"- {w}" for w in warnings)
         ).strip()
-        print(f"[ai] validation warnings: {warnings}")
+        logger.warning(f"Validation warnings: {warnings}")
 
     return parsed
 

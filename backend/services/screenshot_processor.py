@@ -2,6 +2,9 @@ import google.generativeai as genai
 from PIL import Image
 from backend.config import settings
 from backend.database import get_db
+from backend.utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 if settings.gemini_api_key:
     genai.configure(api_key=settings.gemini_api_key)
@@ -99,18 +102,18 @@ Be factual and precise. Only report what you can actually see in the image."""
                         max_output_tokens=2048,
                     ),
                 )
-                print(f"Screenshot extraction success with {model_name}")
+                logger.info(f"Screenshot extraction success with {model_name}")
                 return response.text
             except Exception as e:
                 error_str = str(e)
                 if "429" in error_str or "quota" in error_str.lower():
-                    print(f"Screenshot model {model_name} quota exceeded, trying next...")
+                    logger.warning(f"Screenshot model {model_name} quota exceeded, trying next...")
                 elif "404" in error_str or "not found" in error_str.lower():
-                    print(f"Screenshot model {model_name} not available, trying next...")
+                    logger.warning(f"Screenshot model {model_name} not available, trying next...")
                 else:
-                    print(f"Screenshot model {model_name} error: {e}, trying next...")
+                    logger.warning(f"Screenshot model {model_name} error: {e}, trying next...")
                 continue
         return "[All AI models failed for screenshot processing]"
     except Exception as e:
-        print(f"Screenshot processing error for {image_path}: {e}")
+        logger.error(f"Screenshot processing error for {image_path}: {e}")
         return f"[Could not process screenshot: {str(e)}]"

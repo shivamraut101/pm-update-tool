@@ -1,16 +1,22 @@
 from contextlib import asynccontextmanager
 from pathlib import Path
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 import asyncio
 import os
+import time
 
 from backend.config import settings
 from backend.database import connect_db, close_db
-from backend.routers import updates, projects, team, reports, reminders, dashboard
+from backend.routers import updates, projects, team, reports, reminders, dashboard, clients
 from backend.routers import telegram as telegram_router
+from backend.utils.logger import setup_logging, get_logger
+
+# Initialize logging
+setup_logging(level="INFO")
+logger = get_logger(__name__)
 
 
 @asynccontextmanager
@@ -37,9 +43,9 @@ async def lifespan(app: FastAPI):
             # Cloud deployment — register webhook so Telegram pushes to us
             ok = await setup_webhook(settings.app_url)
             if ok:
-                print(f"[main] Telegram webhook mode (POST {settings.app_url}/api/telegram/webhook)")
+                logger.info(f"Telegram webhook mode (POST {settings.app_url}/api/telegram/webhook)")
             else:
-                print("[main] Webhook setup failed — falling back to polling")
+                logger.warning("Webhook setup failed — falling back to polling")
                 asyncio.create_task(start_polling())
         else:
             # Local development — use long-polling
@@ -73,6 +79,29 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Request/response logging middleware
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    """Log all HTTP requests with timing information."""
+    start_time = time.time()
+
+    # Log incoming request
+    logger.info(f"→ {request.method} {request.url.path} | Client: {request.client.host if request.client else 'unknown'}")
+
+    try:
+        # Process request
+        response = await call_next(request)
+
+        # Log response with timing
+        duration = (time.time() - start_time) * 1000
+        logger.info(f"← {request.method} {request.url.path} | Status: {response.status_code} | Duration: {duration:.2f}ms")
+
+        return response
+    except Exception as e:
+        duration = (time.time() - start_time) * 1000
+        logger.error(f"✗ {request.method} {request.url.path} | Error: {str(e)} | Duration: {duration:.2f}ms")
+        raise
+
 # Mount uploads directory for screenshots
 uploads_dir = os.path.join(os.path.dirname(__file__), "..", "uploads")
 os.makedirs(uploads_dir, exist_ok=True)
@@ -82,6 +111,7 @@ app.mount("/uploads", StaticFiles(directory=uploads_dir), name="uploads")
 app.include_router(updates.router, prefix="/api", tags=["Updates"])
 app.include_router(projects.router, prefix="/api", tags=["Projects"])
 app.include_router(team.router, prefix="/api", tags=["Team"])
+app.include_router(clients.router, prefix="/api", tags=["Clients"])
 app.include_router(reports.router, prefix="/api", tags=["Reports"])
 app.include_router(reminders.router, prefix="/api", tags=["Reminders"])
 app.include_router(telegram_router.router, prefix="/api", tags=["Telegram"])

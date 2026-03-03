@@ -10,6 +10,9 @@ from backend.database import get_db
 from backend.config import settings
 from backend.utils.date_helpers import format_date_display, week_boundaries
 from backend.utils.text_formatters import markdown_to_plain_text
+from backend.utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 # Jinja2 environment for email templates
 _template_dir = os.path.join(os.path.dirname(__file__), "..", "templates")
@@ -182,13 +185,13 @@ Keep it under 100 words. Be direct, no fluff. Do not use markdown formatting - p
                         max_output_tokens=300,
                     ),
                 )
-                print(f"Daily executive summary generated with {model_name}")
+                logger.info(f"Daily executive summary generated with {model_name}")
                 return response.text.strip()
             except Exception as e:
-                print(f"Daily summary model {model_name} error: {e}")
+                logger.warning(f"Daily summary model {model_name} error: {e}")
                 continue
     except Exception as e:
-        print(f"Daily executive summary error: {e}")
+        logger.error(f"Daily executive summary error: {e}")
     return ""
 
 
@@ -422,22 +425,22 @@ Keep the tone professional and concise. This goes directly to senior management.
                         max_output_tokens=4096,
                     ),
                 )
-                print(f"Weekly synthesis success with {model_name}")
+                logger.info(f"Weekly synthesis success with {model_name}")
                 return response.text
             except Exception as e:
                 last_error = e
                 error_str = str(e)
                 if "429" in error_str or "quota" in error_str.lower():
-                    print(f"Model {model_name} quota exceeded, trying next...")
+                    logger.warning(f"Model {model_name} quota exceeded, trying next...")
                 elif "404" in error_str or "not found" in error_str.lower():
-                    print(f"Model {model_name} not available, trying next...")
+                    logger.warning(f"Model {model_name} not available, trying next...")
                 else:
-                    print(f"Model {model_name} error: {e}, trying next...")
+                    logger.warning(f"Model {model_name} error: {e}, trying next...")
                 continue
 
         # All models failed
-        print(f"All weekly synthesis models failed: {last_error}")
+        logger.error(f"All weekly synthesis models failed: {last_error}")
         return f"## Weekly Summary - {week_start} to {week_end}\n\n[AI synthesis unavailable]\n\n{daily_content}"
     except Exception as e:
-        print(f"Weekly synthesis error: {e}")
+        logger.error(f"Weekly synthesis error: {e}")
         return f"## Weekly Summary - {week_start} to {week_end}\n\n[AI synthesis unavailable]\n\n{daily_content}"

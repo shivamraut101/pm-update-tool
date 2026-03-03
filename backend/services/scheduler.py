@@ -3,6 +3,9 @@ from apscheduler.triggers.cron import CronTrigger
 
 from backend.config import settings
 from backend.utils.date_helpers import today_str, week_boundaries
+from backend.utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 _scheduler = AsyncIOScheduler()
 
@@ -70,8 +73,8 @@ async def start_scheduler():
     )
 
     _scheduler.start()
-    print(f"Scheduler started. Daily brief at {settings.daily_brief_time}, "
-          f"Weekly report on {settings.weekly_report_day} at {settings.weekly_report_time}")
+    logger.info(f"Scheduler started. Daily brief at {settings.daily_brief_time}, "
+                f"Weekly report on {settings.weekly_report_day} at {settings.weekly_report_time}")
 
 
 def stop_scheduler():
@@ -87,11 +90,11 @@ async def _daily_brief_job():
     from backend.services.telegram_bot import send_telegram_message
 
     date = today_str()
-    print(f"[Scheduler] Generating daily brief for {date}")
+    logger.info(f"Generating daily brief for {date}")
 
     report = await generate_daily_brief(date)
     if not report:
-        print(f"[Scheduler] No updates for {date}, skipping daily brief")
+        logger.info(f"No updates for {date}, skipping daily brief")
         return
 
     results = []
@@ -102,10 +105,10 @@ async def _daily_brief_job():
         try:
             await send_daily_brief_email(report, emails)
             results.append(f"email:{','.join(emails)}")
-            print(f"[Scheduler] Daily brief emailed to {emails}")
+            logger.info(f"Daily brief emailed to {emails}")
         except Exception as e:
             results.append(f"email_error:{str(e)[:100]}")
-            print(f"[Scheduler] Email send error: {e}")
+            logger.error(f"Email send error: {e}")
 
     # Send to management via Telegram
     mgmt_chat_id = settings.management_telegram_chat_id
@@ -114,10 +117,10 @@ async def _daily_brief_job():
             plain = report.get("content_plain") or report.get("content_markdown", "")
             await send_telegram_message(mgmt_chat_id, f"*Daily Brief - {date}*\n\n{plain}")
             results.append("telegram:management")
-            print(f"[Scheduler] Daily brief sent via Telegram to management")
+            logger.info(f"Daily brief sent via Telegram to management")
         except Exception as e:
             results.append(f"telegram_error:{str(e)[:100]}")
-            print(f"[Scheduler] Telegram send error: {e}")
+            logger.error(f"Telegram send error: {e}")
 
     # Notify PM on Telegram
     if settings.telegram_chat_id:
@@ -134,11 +137,11 @@ async def _weekly_report_job():
     from backend.services.telegram_bot import send_telegram_message
 
     _, week_end = week_boundaries()
-    print(f"[Scheduler] Generating weekly report ending {week_end}")
+    logger.info(f"Generating weekly report ending {week_end}")
 
     report = await generate_weekly_report(week_end)
     if not report:
-        print("[Scheduler] No daily reports found for weekly summary")
+        logger.info("No daily reports found for weekly summary")
         return
 
     results = []
@@ -148,10 +151,10 @@ async def _weekly_report_job():
         try:
             await send_weekly_report_email(report, emails)
             results.append(f"email:{','.join(emails)}")
-            print(f"[Scheduler] Weekly report emailed to {emails}")
+            logger.info(f"Weekly report emailed to {emails}")
         except Exception as e:
             results.append(f"email_error:{str(e)[:100]}")
-            print(f"[Scheduler] Email send error: {e}")
+            logger.error(f"Email send error: {e}")
 
     # Send to management via Telegram
     mgmt_chat_id = settings.management_telegram_chat_id
@@ -160,10 +163,10 @@ async def _weekly_report_job():
             plain = report.get("content_plain") or report.get("content_markdown", "")
             await send_telegram_message(mgmt_chat_id, f"*Weekly Report*\n\n{plain}")
             results.append("telegram:management")
-            print(f"[Scheduler] Weekly report sent via Telegram to management")
+            logger.info(f"Weekly report sent via Telegram to management")
         except Exception as e:
             results.append(f"telegram_error:{str(e)[:100]}")
-            print(f"[Scheduler] Telegram send error: {e}")
+            logger.error(f"Telegram send error: {e}")
 
     # Notify PM on Telegram
     if settings.telegram_chat_id:
@@ -176,7 +179,7 @@ async def _weekly_report_job():
 async def _reminder_check_job():
     """Run all reminder checks."""
     from backend.services.reminder_engine import run_reminder_checks
-    print("[Scheduler] Running reminder checks")
+    logger.info("Running reminder checks")
     await run_reminder_checks()
 
 
@@ -191,7 +194,7 @@ async def _no_update_reminder_job():
     count = await db.updates.count_documents({"date": date})
 
     if count == 0:
-        print(f"[Scheduler] No updates today ({date}), sending reminder")
+        logger.info(f"No updates today ({date}), sending reminder")
         await run_reminder_checks()
         if settings.telegram_chat_id:
             try:
@@ -201,4 +204,4 @@ async def _no_update_reminder_job():
                     "The daily brief goes out soon!",
                 )
             except Exception as e:
-                print(f"[Scheduler] Reminder Telegram error: {e}")
+                logger.error(f"Reminder Telegram error: {e}")

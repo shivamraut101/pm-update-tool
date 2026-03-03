@@ -3,6 +3,9 @@ from datetime import datetime
 
 from backend.config import settings
 from backend.database import get_db
+from backend.utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 async def send_email(
@@ -14,7 +17,7 @@ async def send_email(
 ):
     """Send an email via Resend API with optional CC."""
     if not settings.resend_api_key:
-        print("Email not configured (no RESEND_API_KEY) - skipping send")
+        logger.warning("Email not configured (no RESEND_API_KEY) - skipping send")
         return
 
     resend.api_key = settings.resend_api_key
@@ -36,11 +39,11 @@ async def send_email(
     try:
         result = resend.Emails.send(params)
         all_recipients = list(to_emails) + (cc_emails or [])
-        print(f"[email] Successfully sent to {all_recipients} (id: {result.get('id', 'unknown')})")
+        logger.info(f"Successfully sent to {all_recipients} (id: {result.get('id', 'unknown')})")
     except Exception as e:
         error_type = type(e).__name__
         error_msg = str(e)
-        print(f"[email] Resend error: {error_type}: {error_msg}")
+        logger.error(f"Resend error: {error_type}: {error_msg}")
         raise
 
 

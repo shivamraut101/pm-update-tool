@@ -32,6 +32,8 @@ class TeamMemberResponse(BaseModel):
     email: str
     project_ids: List[str]
     is_active: bool
+    auto_created: bool = False
+    needs_reference_sync: bool = False
     created_at: datetime
 
     class Config:
