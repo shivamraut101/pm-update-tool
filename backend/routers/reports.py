@@ -44,7 +44,10 @@ async def get_report(report_id: str):
 async def trigger_daily_report(date: Optional[str] = None):
     """Manually trigger daily brief generation."""
     target_date = date or today_str()
-    report = await generate_daily_brief(target_date)
+    try:
+        report = await generate_daily_brief(target_date)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Report generation failed: {str(e)}")
     if report:
         report["_id"] = str(report["_id"])
     return report or {"message": "No updates found for this date"}
@@ -54,7 +57,10 @@ async def trigger_daily_report(date: Optional[str] = None):
 async def trigger_weekly_report():
     """Manually trigger weekly report generation."""
     _, week_end = week_boundaries()
-    report = await generate_weekly_report(week_end)
+    try:
+        report = await generate_weekly_report(week_end)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Weekly report generation failed: {str(e)}")
     if report:
         report["_id"] = str(report["_id"])
     return report or {"message": "No daily reports found for this week"}

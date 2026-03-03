@@ -9,7 +9,7 @@ import os
 from backend.database import get_db
 from backend.config import settings
 from backend.utils.date_helpers import format_date_display, week_boundaries
-from backend.utils.text_formatters import markdown_to_whatsapp
+from backend.utils.text_formatters import markdown_to_plain_text
 
 # Jinja2 environment for email templates
 _template_dir = os.path.join(os.path.dirname(__file__), "..", "templates")
@@ -105,8 +105,11 @@ async def generate_daily_brief(date: str) -> dict | None:
     except Exception:
         html = f"<pre>{full_markdown}</pre>"
 
-    # Plain text for WhatsApp
-    plain = markdown_to_whatsapp(full_markdown)
+    # Plain text for Telegram/plain delivery
+    try:
+        plain = markdown_to_plain_text(full_markdown)
+    except Exception:
+        plain = full_markdown
 
     # Store report
     report_doc = {
@@ -129,7 +132,7 @@ async def generate_daily_brief(date: str) -> dict | None:
         },
         "delivery_status": {
             "email": {"sent": False, "sent_at": None, "error": None},
-            "whatsapp": {"sent": False, "sent_at": None, "error": None},
+            "telegram": {"sent": False, "sent_at": None, "error": None},
         },
         "source_update_ids": [str(u["_id"]) for u in updates],
         "created_at": datetime.utcnow(),
@@ -298,7 +301,10 @@ async def generate_weekly_report(week_end_date: str) -> dict | None:
     except Exception:
         html = f"<pre>{weekly_markdown}</pre>"
 
-    plain = markdown_to_whatsapp(weekly_markdown)
+    try:
+        plain = markdown_to_plain_text(weekly_markdown)
+    except Exception:
+        plain = weekly_markdown
 
     report_doc = {
         "type": "weekly",
@@ -311,7 +317,7 @@ async def generate_weekly_report(week_end_date: str) -> dict | None:
         "stats": weekly_stats,
         "delivery_status": {
             "email": {"sent": False, "sent_at": None, "error": None},
-            "whatsapp": {"sent": False, "sent_at": None, "error": None},
+            "telegram": {"sent": False, "sent_at": None, "error": None},
         },
         "source_update_ids": [],
         "created_at": datetime.utcnow(),

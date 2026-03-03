@@ -28,8 +28,15 @@ def configure_telegram(bot_token: str, authorized_chat_id: str = ""):
     _authorized_chat_id = authorized_chat_id
 
 
+def _safe_md(text: str) -> str:
+    """Escape Telegram Markdown V1 special characters in user-generated text."""
+    for ch in ("\\", "_", "*", "`", "["):
+        text = text.replace(ch, f"\\{ch}")
+    return text
+
+
 async def send_telegram_message(chat_id: str, text: str):
-    """Send a message to a Telegram chat."""
+    """Send a message to a Telegram chat. Falls back to plain text if Markdown fails."""
     if not _bot_token:
         print("[telegram] Bot token not configured")
         return
@@ -37,9 +44,19 @@ async def send_telegram_message(chat_id: str, text: str):
     if len(text) > 4000:
         text = text[:4000] + "\n..."
     async with httpx.AsyncClient() as client:
-        await client.post(
+        # Try with Markdown first
+        resp = await client.post(
             f"{_base_url}/sendMessage",
             json={"chat_id": chat_id, "text": text, "parse_mode": "Markdown"},
+            timeout=30.0,
+        )
+        if resp.status_code == 200 and resp.json().get("ok"):
+            return
+        # Markdown failed — retry as plain text
+        print(f"[telegram] Markdown send failed ({resp.status_code}), retrying as plain text")
+        await client.post(
+            f"{_base_url}/sendMessage",
+            json={"chat_id": chat_id, "text": text},
             timeout=30.0,
         )
 
@@ -175,6 +192,10 @@ async def _register_commands():
         {"command": "status", "description": "Quick counts for today"},
         {"command": "today", "description": "Detailed parsed updates today"},
         {"command": "pending", "description": "Team members with no updates"},
+        {"command": "projects", "description": "List all active projects"},
+        {"command": "team", "description": "List all team members"},
+        {"command": "reminders", "description": "Show active reminders"},
+        {"command": "sync", "description": "Re-sync projects & team from reference DB"},
         {"command": "report", "description": "Generate & send daily brief"},
         {"command": "week", "description": "Generate & send weekly report"},
         {"command": "undo", "description": "Delete last submitted update"},
@@ -267,6 +288,18 @@ async def _handle_message(message: dict):
     if lower_text == "/pending":
         await _cmd_pending(chat_id)
         return
+    if lower_text == "/projects":
+        await _cmd_projects(chat_id)
+        return
+    if lower_text == "/team":
+        await _cmd_team(chat_id)
+        return
+    if lower_text == "/reminders":
+        await _cmd_reminders(chat_id)
+        return
+    if lower_text == "/sync":
+        await _cmd_sync(chat_id)
+        return
     if lower_text == "/report":
         await _cmd_report(chat_id)
         return
@@ -331,7 +364,7 @@ async def _process_update(chat_id: str, message: dict, text: str):
     if team_updates:
         names = set(t["team_member_name"] for t in team_updates)
         projects_mentioned = set(t["project_name"] for t in team_updates)
-        ack_parts.append(f"*Parsed:* {', '.join(names)} on {', '.join(projects_mentioned)}.")
+        ack_parts.append(f"Parsed: {', '.join(names)} on {', '.join(projects_mentioned)}.")
     action_items = parsed.get("action_items", [])
     if action_items:
         ack_parts.append(f"{len(action_items)} action item(s) noted.")
@@ -355,12 +388,16 @@ async def _cmd_start(chat_id: str):
         "/status - Quick counts for today\n"
         "/today - Detailed view of all parsed updates\n"
         "/pending - Team members with no updates today\n"
+        "/projects - List all active projects\n"
+        "/team - List all team members\n"
+        "/reminders - Show active reminders\n"
+        "/sync - Re-sync from reference database\n"
         "/report - Generate & send daily brief NOW\n"
         "/week - Generate & send weekly report NOW\n"
         "/undo - Delete your last update\n"
         "/help - Show commands\n\n"
         "Just type your updates, e.g.:\n"
-        "_Yash fixed the login bug on B2B Portal. Shobhit pushed API docs PR._\n\n"
+        "Yash fixed the login bug on B2B Portal. Shobhit pushed API docs PR.\n\n"
         f"Your chat ID: `{chat_id}`",
     )
 
@@ -375,10 +412,14 @@ async def _cmd_help(chat_id: str):
         "*Review:*\n"
         "/status - Quick counts (updates, activities, blockers)\n"
         "/today - Detailed parsed updates (who did what)\n"
-        "/pending - Team members missing from today's updates\n\n"
+        "/pending - Team members missing from today's updates\n"
+        "/projects - List all active projects\n"
+        "/team - List all team members\n"
+        "/reminders - Show active reminders\n\n"
         "*Actions:*\n"
         "/report - Generate & send daily brief to management\n"
         "/week - Generate & send weekly report to management\n"
+        "/sync - Re-sync projects & team from reference DB\n"
         "/undo - Delete your last submitted update",
     )
 
@@ -423,9 +464,12 @@ async def _cmd_today(chat_id: str):
 
     if by_project:
         for proj, tus in sorted(by_project.items()):
-            lines.append(f"\n*{proj}*")
+            lines.append(f"\n*{_safe_md(proj)}*")
             for tu in tus:
-                lines.append(f"  - {tu.get('team_member_name', '?')}: {tu.get('summary', '')} [{tu.get('status', '').upper()}]")
+                name = _safe_md(tu.get("team_member_name", "?"))
+                summary = _safe_md(tu.get("summary", ""))
+                status = tu.get("status", "").upper()
+                lines.append(f"  - {name}: {summary} [{status}]")
 
     all_actions = []
     for u in updates:
@@ -433,7 +477,9 @@ async def _cmd_today(chat_id: str):
     if all_actions:
         lines.append(f"\n*Action Items ({len(all_actions)}):*")
         for ai in all_actions:
-            lines.append(f"  - [{ai.get('priority', 'medium').upper()}] {ai.get('description', '')} -> {ai.get('assigned_to', 'self')}")
+            desc = _safe_md(ai.get("description", ""))
+            assigned = _safe_md(ai.get("assigned_to", "self"))
+            lines.append(f"  - [{ai.get('priority', 'medium').upper()}] {desc} -> {assigned}")
 
     all_blockers = []
     for u in updates:
@@ -441,7 +487,9 @@ async def _cmd_today(chat_id: str):
     if all_blockers:
         lines.append(f"\n*Blockers ({len(all_blockers)}):*")
         for b in all_blockers:
-            lines.append(f"  - [{b.get('severity', 'medium').upper()}] {b.get('project_name', '')}: {b.get('description', '')}")
+            proj = _safe_md(b.get("project_name", ""))
+            desc = _safe_md(b.get("description", ""))
+            lines.append(f"  - [{b.get('severity', 'medium').upper()}] {proj}: {desc}")
 
     await send_telegram_message(chat_id, "\n".join(lines))
 
@@ -472,15 +520,96 @@ async def _cmd_pending(chat_id: str):
     if covered:
         lines.append(f"*Covered ({len(covered)}):*")
         for name in sorted(covered):
-            lines.append(f"  + {name}")
+            lines.append(f"  + {_safe_md(name)}")
     if missing:
         lines.append(f"\n*Missing ({len(missing)}):*")
         for name in sorted(missing):
-            lines.append(f"  - {name}")
+            lines.append(f"  - {_safe_md(name)}")
     else:
         lines.append("\nAll team members covered!")
 
     await send_telegram_message(chat_id, "\n".join(lines))
+
+
+async def _cmd_projects(chat_id: str):
+    db = get_db()
+    projects = await db.projects.find({"status": "active"}).to_list(None)
+
+    if not projects:
+        await send_telegram_message(chat_id, "No active projects found.")
+        return
+
+    lines = [f"*Active Projects ({len(projects)}):*\n"]
+    for p in sorted(projects, key=lambda x: x.get("name", "")):
+        name = _safe_md(p.get("name", "Unknown"))
+        code = p.get("code", "")
+        health = p.get("health", "unknown")
+        members = len(p.get("team_member_ids", []))
+        health_icon = {"on_track": "🟢", "at_risk": "🟡", "off_track": "🔴"}.get(health, "⚪")
+        lines.append(f"{health_icon} *{name}* [{code}] - {members} member(s)")
+        if p.get("tech_stack"):
+            lines.append(f"    Tech: {', '.join(p['tech_stack'])}")
+
+    await send_telegram_message(chat_id, "\n".join(lines))
+
+
+async def _cmd_team(chat_id: str):
+    db = get_db()
+    members = await db.team_members.find({"is_active": True}).to_list(None)
+
+    if not members:
+        await send_telegram_message(chat_id, "No active team members found.")
+        return
+
+    lines = [f"*Team Members ({len(members)}):*\n"]
+    for m in sorted(members, key=lambda x: x.get("name", "")):
+        name = _safe_md(m.get("name", "Unknown"))
+        role = m.get("role", "")
+        project_count = len(m.get("project_ids", []))
+        lines.append(f"- *{name}* ({role}) - {project_count} project(s)")
+
+    await send_telegram_message(chat_id, "\n".join(lines))
+
+
+async def _cmd_reminders(chat_id: str):
+    db = get_db()
+    reminders = await db.reminders.find({"is_dismissed": False}).to_list(None)
+
+    if not reminders:
+        await send_telegram_message(chat_id, "No active reminders. All caught up!")
+        return
+
+    priority_icon = {"high": "🔴", "medium": "🟡", "low": "🟢"}
+    lines = [f"*Active Reminders ({len(reminders)}):*\n"]
+    for r in reminders:
+        icon = priority_icon.get(r.get("priority", "medium"), "⚪")
+        rtype = r.get("type", "").replace("_", " ").title()
+        msg = _safe_md(r.get("message", ""))
+        lines.append(f"{icon} [{rtype}] {msg}")
+
+    await send_telegram_message(chat_id, "\n".join(lines))
+
+
+async def _cmd_sync(chat_id: str):
+    await send_telegram_message(chat_id, "Syncing from reference database...")
+    try:
+        from backend.services.ref_sync import sync_from_reference_db
+        await sync_from_reference_db()
+
+        db = get_db()
+        members = await db.team_members.count_documents({"is_active": True})
+        projects = await db.projects.count_documents({"status": "active"})
+        clients = await db.clients.count_documents({})
+
+        await send_telegram_message(
+            chat_id,
+            f"*Sync complete!*\n\n"
+            f"- {members} team member(s)\n"
+            f"- {projects} active project(s)\n"
+            f"- {clients} client(s)",
+        )
+    except Exception as e:
+        await send_telegram_message(chat_id, f"Sync failed: {str(e)[:200]}")
 
 
 async def _cmd_report(chat_id: str):
@@ -488,7 +617,13 @@ async def _cmd_report(chat_id: str):
     from backend.services.report_generator import generate_daily_brief
     from backend.services.email_sender import send_daily_brief_email
 
-    report = await generate_daily_brief(today_str())
+    try:
+        report = await generate_daily_brief(today_str())
+    except Exception as e:
+        print(f"[telegram] Report generation error: {e}")
+        await send_telegram_message(chat_id, f"Report generation failed: {str(e)[:200]}")
+        return
+
     if not report:
         await send_telegram_message(chat_id, "No updates today — nothing to generate.")
         return
@@ -524,8 +659,14 @@ async def _cmd_week(chat_id: str):
     from backend.services.email_sender import send_weekly_report_email
     from backend.utils.date_helpers import week_boundaries
 
-    _, week_end = week_boundaries()
-    report = await generate_weekly_report(week_end)
+    try:
+        _, week_end = week_boundaries()
+        report = await generate_weekly_report(week_end)
+    except Exception as e:
+        print(f"[telegram] Weekly report generation error: {e}")
+        await send_telegram_message(chat_id, f"Weekly report generation failed: {str(e)[:200]}")
+        return
+
     if not report:
         await send_telegram_message(chat_id, "No daily reports this week — nothing to synthesize.")
         return
@@ -568,9 +709,9 @@ async def _cmd_undo(chat_id: str):
 
     raw = last_update.get("raw_text", "")[:100]
     team_updates = last_update.get("parsed", {}).get("team_updates", [])
-    preview = raw if raw else f"{len(team_updates)} team update(s)"
+    preview = _safe_md(raw) if raw else f"{len(team_updates)} team update(s)"
     await db.updates.delete_one({"_id": last_update["_id"]})
     await send_telegram_message(
         chat_id,
-        f"*Deleted last update:*\n_{preview}_\n\nSend /today to review remaining updates.",
+        f"*Deleted last update:*\n{preview}\n\nSend /today to review remaining updates.",
     )

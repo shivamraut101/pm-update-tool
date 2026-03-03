@@ -1,8 +1,8 @@
 import re
 
 
-def markdown_to_whatsapp(text: str) -> str:
-    """Convert markdown formatting to WhatsApp-compatible formatting."""
+def markdown_to_plain_text(text: str) -> str:
+    """Convert markdown formatting to simplified plain text for Telegram/messaging."""
     # Convert ## headers to *BOLD CAPS*
     text = re.sub(
         r"^##\s+(.+)$",
@@ -17,7 +17,7 @@ def markdown_to_whatsapp(text: str) -> str:
         text,
         flags=re.MULTILINE,
     )
-    # Convert **bold** to *bold* (WhatsApp single asterisk)
+    # Convert **bold** to *bold* (single asterisk for messaging apps)
     text = re.sub(r"\*\*(.+?)\*\*", r"*\1*", text)
     # Convert `code` to ```code```
     text = re.sub(r"`([^`]+)`", r"```\1```", text)
@@ -27,7 +27,7 @@ def markdown_to_whatsapp(text: str) -> str:
 
 
 def truncate_text(text: str, max_length: int = 1500) -> list:
-    """Split text into chunks suitable for WhatsApp messages (1600 char limit)."""
+    """Split text into chunks suitable for messaging (1600 char limit)."""
     if len(text) <= max_length:
         return [text]
 

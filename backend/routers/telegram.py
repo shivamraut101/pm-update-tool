@@ -30,7 +30,10 @@ async def trigger_daily_report(request: Request):
     from backend.services.email_sender import send_daily_brief_email
 
     date = today_str()
-    report = await generate_daily_brief(date)
+    try:
+        report = await generate_daily_brief(date)
+    except Exception as e:
+        return {"status": "error", "detail": f"Report generation failed: {str(e)[:200]}"}
     if not report:
         return {"status": "skipped", "reason": "no updates today"}
 
@@ -74,7 +77,10 @@ async def trigger_weekly_report(request: Request):
     from backend.services.email_sender import send_weekly_report_email
 
     _, week_end = week_boundaries()
-    report = await generate_weekly_report(week_end)
+    try:
+        report = await generate_weekly_report(week_end)
+    except Exception as e:
+        return {"status": "error", "detail": f"Weekly report generation failed: {str(e)[:200]}"}
     if not report:
         return {"status": "skipped", "reason": "no daily reports this week"}
 

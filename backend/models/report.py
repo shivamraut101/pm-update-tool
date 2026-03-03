@@ -11,7 +11,7 @@ class DeliveryStatus(BaseModel):
 
 class ReportDeliveryStatus(BaseModel):
     email: DeliveryStatus = DeliveryStatus()
-    whatsapp: DeliveryStatus = DeliveryStatus()
+    telegram: DeliveryStatus = DeliveryStatus()
 
 
 class ReportResponse(BaseModel):
