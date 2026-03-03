@@ -5,7 +5,9 @@ from backend.config import settings
 from backend.services.telegram_bot import handle_webhook_update, send_telegram_message
 from backend.services.email_sender import send_email
 from backend.utils.date_helpers import today_str, week_boundaries
+from backend.utils.logger import get_logger
 
+logger = get_logger(__name__)
 router = APIRouter()
 
 
@@ -13,6 +15,7 @@ router = APIRouter()
 async def telegram_webhook(request: Request):
     """Receive updates from Telegram via webhook."""
     update = await request.json()
+    logger.info(f"Webhook received | Update ID: {update.get('update_id')} | Message keys: {update.get('message', {}).keys() if update.get('message') else 'none'}")
     await handle_webhook_update(update)
     return {"ok": True}
 

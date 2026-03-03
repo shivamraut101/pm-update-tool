@@ -38,17 +38,22 @@ async def lifespan(app: FastAPI):
     )
     if settings.telegram_bot_token:
         configure_telegram(settings.telegram_bot_token, settings.telegram_chat_id)
+        logger.info(f"Telegram bot configured | Authorized Chat ID: {settings.telegram_chat_id}")
+        logger.info(f"Management Chat ID: {settings.management_telegram_chat_id or 'Not configured'}")
+        logger.info(f"Management Emails: {settings.get_management_emails_list() or 'Not configured'}")
 
         if settings.app_url:
             # Cloud deployment — register webhook so Telegram pushes to us
+            logger.info(f"Attempting webhook mode | APP_URL: {settings.app_url}")
             ok = await setup_webhook(settings.app_url)
             if ok:
-                logger.info(f"Telegram webhook mode (POST {settings.app_url}/api/telegram/webhook)")
+                logger.info(f"✅ Telegram WEBHOOK MODE active → {settings.app_url}/api/telegram/webhook")
             else:
                 logger.warning("Webhook setup failed — falling back to polling")
                 asyncio.create_task(start_polling())
         else:
             # Local development — use long-polling
+            logger.info("APP_URL not set — using POLLING MODE (local development)")
             asyncio.create_task(start_polling())
 
     yield
