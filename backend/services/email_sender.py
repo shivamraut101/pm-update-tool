@@ -32,6 +32,8 @@ async def send_email(
 
     if settings.from_email:
         params["reply_to"] = settings.from_email
+        # BCC yourself so sent emails appear in your Gmail sent folder
+        params["bcc"] = [settings.from_email]
 
     if cc_emails:
         params["cc"] = cc_emails
@@ -39,7 +41,8 @@ async def send_email(
     try:
         result = resend.Emails.send(params)
         all_recipients = list(to_emails) + (cc_emails or [])
-        logger.info(f"Successfully sent to {all_recipients} (id: {result.get('id', 'unknown')})")
+        bcc_info = " (BCC: self)" if settings.from_email else ""
+        logger.info(f"Successfully sent to {all_recipients}{bcc_info} (id: {result.get('id', 'unknown')})")
     except Exception as e:
         error_type = type(e).__name__
         error_msg = str(e)
