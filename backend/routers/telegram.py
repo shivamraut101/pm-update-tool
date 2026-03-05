@@ -1,4 +1,4 @@
-"""Telegram webhook route + cron trigger endpoints for Render deployment."""
+"""Telegram webhook route + cron trigger endpoints for VPS / cloud deployment."""
 from fastapi import APIRouter, Request, HTTPException
 
 from backend.config import settings
@@ -162,12 +162,12 @@ async def test_email():
 
 
 # ---------------------------------------------------------------------------
-# Health check (use with cron-job.org to keep Render awake)
+# Health check
 # ---------------------------------------------------------------------------
 
 @router.get("/health")
 async def health_check():
-    """Health check endpoint — use cron-job.org to ping every 5 min."""
+    """Health check endpoint for uptime monitoring."""
     return {"status": "ok", "service": "pm-update-tool"}
 
 

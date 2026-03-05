@@ -1,9 +1,10 @@
-"""Telegram bot — supports both webhook mode (Render/cloud) and polling mode (local)."""
+"""Telegram bot — supports both webhook mode (VPS/cloud) and polling mode (local)."""
 import asyncio
 import os
 import re
 import tempfile
 import time
+import traceback
 from datetime import datetime
 from collections import deque
 
@@ -26,6 +27,9 @@ _running = False
 _offset = 0
 _webhook_mode = False
 
+# Persistent HTTP client (avoids DNS re-resolution on every call)
+_http_client: httpx.AsyncClient | None = None
+
 # Deduplication: Track recently processed update IDs (keep last 100)
 _processed_updates = deque(maxlen=100)
 
@@ -37,11 +41,33 @@ _undo_lock = asyncio.Lock()
 _update_processing_lock = asyncio.Lock()
 
 
+async def _get_client() -> httpx.AsyncClient:
+    """Get or create a persistent HTTP client with connection pooling."""
+    global _http_client
+    if _http_client is None or _http_client.is_closed:
+        _http_client = httpx.AsyncClient(
+            timeout=httpx.Timeout(connect=10.0, read=45.0, write=10.0, pool=10.0),
+            limits=httpx.Limits(max_connections=10, max_keepalive_connections=5),
+        )
+        logger.info("HTTP client created (persistent, connection-pooled)")
+    return _http_client
+
+
+async def _close_client():
+    """Close the persistent HTTP client."""
+    global _http_client
+    if _http_client and not _http_client.is_closed:
+        await _http_client.aclose()
+        _http_client = None
+        logger.info("HTTP client closed")
+
+
 def configure_telegram(bot_token: str, authorized_chat_id: str = ""):
     global _bot_token, _base_url, _authorized_chat_id
     _bot_token = bot_token
     _base_url = f"https://api.telegram.org/bot{bot_token}"
     _authorized_chat_id = authorized_chat_id
+    logger.info(f"Telegram configured | base_url=https://api.telegram.org/bot***{bot_token[-6:]} | authorized_chat={authorized_chat_id}")
 
 
 def _safe_md(text: str) -> str:
@@ -54,12 +80,14 @@ def _safe_md(text: str) -> str:
 async def send_telegram_message(chat_id: str, text: str):
     """Send a message to a Telegram chat. Falls back to plain text if Markdown fails."""
     if not _bot_token:
-        logger.warning("Bot token not configured")
+        logger.warning("send_telegram_message called but bot token not configured")
         return
     # Telegram message limit is 4096 chars
     if len(text) > 4000:
         text = text[:4000] + "\n..."
-    async with httpx.AsyncClient() as client:
+    t_start = time.time()
+    client = await _get_client()
+    try:
         # Try with Markdown first
         resp = await client.post(
             f"{_base_url}/sendMessage",
@@ -67,49 +95,57 @@ async def send_telegram_message(chat_id: str, text: str):
             timeout=30.0,
         )
         if resp.status_code == 200 and resp.json().get("ok"):
+            logger.info(f"MSG SENT → chat={chat_id} | {len(text)} chars | {(time.time()-t_start)*1000:.0f}ms")
             return
         # Markdown failed — retry as plain text
-        logger.warning(f"Markdown send failed ({resp.status_code}), retrying as plain text")
-        await client.post(
+        logger.warning(f"Markdown send failed (status={resp.status_code}, body={resp.text[:200]}), retrying as plain text")
+        resp = await client.post(
             f"{_base_url}/sendMessage",
             json={"chat_id": chat_id, "text": text},
             timeout=30.0,
         )
+        if resp.status_code == 200 and resp.json().get("ok"):
+            logger.info(f"MSG SENT (plain) → chat={chat_id} | {len(text)} chars | {(time.time()-t_start)*1000:.0f}ms")
+        else:
+            logger.error(f"MSG SEND FAILED → chat={chat_id} | status={resp.status_code} | body={resp.text[:300]}")
+    except Exception as e:
+        logger.error(f"MSG SEND ERROR → chat={chat_id} | {type(e).__name__}: {e}\n{traceback.format_exc()}")
 
 
 # ---------------------------------------------------------------------------
-# Webhook Mode (for Render / cloud deployment)
+# Webhook Mode (for VPS / cloud deployment)
 # ---------------------------------------------------------------------------
 
 async def setup_webhook(app_url: str):
-    """Register webhook with Telegram. Call on startup when deploying to cloud."""
+    """Register webhook with Telegram. Call on startup when deploying to VPS/cloud."""
     global _webhook_mode
     if not _bot_token:
         logger.warning("Bot token not configured — webhook not set")
         return False
 
     webhook_url = f"{app_url}/api/telegram/webhook"
+    logger.info(f"Setting up webhook → {webhook_url}")
     try:
-        async with httpx.AsyncClient() as client:
-            # Delete any existing webhook first
-            await client.post(f"{_base_url}/deleteWebhook", timeout=10.0)
-            # Set new webhook
-            resp = await client.post(
-                f"{_base_url}/setWebhook",
-                json={"url": webhook_url, "allowed_updates": ["message"]},
-                timeout=10.0,
-            )
-            data = resp.json()
-            if data.get("ok"):
-                _webhook_mode = True
-                logger.info(f"Webhook set: {webhook_url}")
-                await _register_commands()
-                return True
-            else:
-                logger.error(f"Webhook setup failed: {data}")
-                return False
+        client = await _get_client()
+        # Delete any existing webhook first
+        await client.post(f"{_base_url}/deleteWebhook", timeout=10.0)
+        # Set new webhook
+        resp = await client.post(
+            f"{_base_url}/setWebhook",
+            json={"url": webhook_url, "allowed_updates": ["message"]},
+            timeout=10.0,
+        )
+        data = resp.json()
+        if data.get("ok"):
+            _webhook_mode = True
+            logger.info(f"✅ Webhook registered: {webhook_url}")
+            await _register_commands()
+            return True
+        else:
+            logger.error(f"Webhook setup failed: {data}")
+            return False
     except Exception as e:
-        logger.error(f"Webhook setup error: {e}")
+        logger.error(f"Webhook setup error: {type(e).__name__}: {e}\n{traceback.format_exc()}")
         return False
 
 
@@ -119,17 +155,18 @@ async def remove_webhook():
     if not _bot_token:
         return
     try:
-        async with httpx.AsyncClient() as client:
-            await client.post(f"{_base_url}/deleteWebhook", timeout=10.0)
+        client = await _get_client()
+        await client.post(f"{_base_url}/deleteWebhook", timeout=10.0)
         _webhook_mode = False
         logger.info("Webhook removed")
     except Exception as e:
-        logger.error(f"Webhook removal error: {e}")
+        logger.error(f"Webhook removal error: {type(e).__name__}: {e}")
 
 
 async def handle_webhook_update(update: dict):
     """Process an incoming webhook update from Telegram. Called by FastAPI route."""
     update_id = update.get("update_id")
+    logger.info(f"WEBHOOK RECV | update_id={update_id} | keys={list(update.keys())}")
 
     # Deduplication: Skip if we've already processed this update
     if update_id and update_id in _processed_updates:
@@ -140,7 +177,13 @@ async def handle_webhook_update(update: dict):
         _processed_updates.append(update_id)
 
     if "message" in update:
-        await _handle_message(update["message"])
+        msg = update["message"]
+        chat_id = msg.get("chat", {}).get("id", "?")
+        text = msg.get("text", msg.get("caption", ""))[:80]
+        logger.info(f"WEBHOOK MSG | chat={chat_id} | text={text}")
+        await _handle_message(msg)
+    else:
+        logger.info(f"WEBHOOK SKIP | update_id={update_id} | no 'message' key (keys: {list(update.keys())})")
 
 
 # ---------------------------------------------------------------------------
@@ -158,59 +201,90 @@ async def start_polling():
     await remove_webhook()
 
     _running = True
-    logger.info("Bot started polling...")
+    logger.info("POLLING START | Beginning long-poll loop...")
 
+    # Verify bot identity
     try:
-        async with httpx.AsyncClient() as client:
-            resp = await client.get(f"{_base_url}/getMe", timeout=10.0)
-            data = resp.json()
-            if data.get("ok"):
-                bot_name = data["result"].get("username", "unknown")
-                logger.info(f"Bot: @{bot_name}")
+        client = await _get_client()
+        resp = await client.get(f"{_base_url}/getMe", timeout=10.0)
+        data = resp.json()
+        if data.get("ok"):
+            bot_info = data["result"]
+            bot_name = bot_info.get("username", "unknown")
+            logger.info(f"POLLING OK | Bot: @{bot_name} (id={bot_info.get('id')}) | Polling active")
+        else:
+            logger.error(f"POLLING WARN | getMe failed: {data}")
     except Exception as e:
-        logger.error(f"Could not get bot info: {e}")
+        logger.error(f"POLLING WARN | Could not verify bot identity: {type(e).__name__}: {e}")
 
     await _register_commands()
+    logger.info(f"POLLING READY | Authorized chat={_authorized_chat_id} | Waiting for messages...")
 
+    consecutive_errors = 0
     while _running:
         try:
             updates = await _get_updates(offset=_offset, timeout=30)
+            if updates:
+                logger.info(f"POLL RECV | {len(updates)} update(s) received")
+            consecutive_errors = 0  # Reset on success
             for update in updates:
                 _offset = update["update_id"] + 1
 
                 # Deduplication: Skip if already processed (extra safety layer)
                 if update["update_id"] in _processed_updates:
+                    logger.debug(f"POLL SKIP | Duplicate update_id={update['update_id']}")
                     continue
                 _processed_updates.append(update["update_id"])
 
                 if "message" in update:
-                    asyncio.create_task(_handle_message(update["message"]))
+                    msg = update["message"]
+                    text = msg.get("text", msg.get("caption", ""))[:80]
+                    logger.info(f"POLL MSG | update_id={update['update_id']} | chat={msg['chat']['id']} | text={text}")
+                    asyncio.create_task(_handle_message(msg))
         except Exception as e:
-            logger.error(f"Polling loop error: {e}")
-            await asyncio.sleep(5)
+            consecutive_errors += 1
+            # Exponential backoff: 5s, 10s, 20s, 30s max
+            wait = min(5 * (2 ** (consecutive_errors - 1)), 30)
+            logger.error(
+                f"POLL ERROR | {type(e).__name__}: {e} | "
+                f"consecutive_errors={consecutive_errors} | retry_in={wait}s"
+            )
+            if consecutive_errors >= 3:
+                logger.error(f"POLL ERROR | Full traceback:\n{traceback.format_exc()}")
+                # Reset the HTTP client on persistent errors (force new DNS resolution)
+                logger.info("POLL RECOVER | Resetting HTTP client...")
+                await _close_client()
+            await asyncio.sleep(wait)
 
 
 def stop_polling():
     global _running
     _running = False
-    logger.info("Bot stopped.")
+    logger.info("POLLING STOP | Bot polling stopped")
+
+
+async def cleanup():
+    """Cleanup resources (call on shutdown)."""
+    stop_polling()
+    await _close_client()
+    logger.info("Bot cleanup complete")
 
 
 async def _get_updates(offset: int = 0, timeout: int = 30):
-    try:
-        async with httpx.AsyncClient() as client:
-            resp = await client.get(
-                f"{_base_url}/getUpdates",
-                params={"offset": offset, "timeout": timeout},
-                timeout=timeout + 10,
-            )
-            if resp.status_code == 200:
-                data = resp.json()
-                if data.get("ok"):
-                    return data.get("result", [])
-    except Exception as e:
-        logger.error(f"Polling error: {e}")
-        await asyncio.sleep(5)
+    """Fetch updates from Telegram using long-polling."""
+    client = await _get_client()
+    resp = await client.get(
+        f"{_base_url}/getUpdates",
+        params={"offset": offset, "timeout": timeout},
+        timeout=timeout + 10,
+    )
+    if resp.status_code == 200:
+        data = resp.json()
+        if data.get("ok"):
+            return data.get("result", [])
+        logger.warning(f"POLL API | getUpdates not ok: {data}")
+    else:
+        logger.warning(f"POLL API | getUpdates status={resp.status_code}: {resp.text[:200]}")
     return []
 
 
@@ -234,14 +308,19 @@ async def _register_commands():
         {"command": "help", "description": "Show all commands"},
     ]
     try:
-        async with httpx.AsyncClient() as client:
-            await client.post(
-                f"{_base_url}/setMyCommands",
-                json={"commands": commands},
-                timeout=10.0,
-            )
-    except Exception:
-        pass
+        client = await _get_client()
+        resp = await client.post(
+            f"{_base_url}/setMyCommands",
+            json={"commands": commands},
+            timeout=10.0,
+        )
+        data = resp.json()
+        if data.get("ok"):
+            logger.info(f"Bot commands registered ({len(commands)} commands)")
+        else:
+            logger.warning(f"Bot commands registration failed: {data}")
+    except Exception as e:
+        logger.error(f"Bot commands registration error: {type(e).__name__}: {e}")
 
 
 # ---------------------------------------------------------------------------
@@ -249,25 +328,31 @@ async def _register_commands():
 # ---------------------------------------------------------------------------
 
 async def _download_photo(file_id: str) -> bytes | None:
+    logger.info(f"PHOTO DOWNLOAD | file_id={file_id}")
     try:
-        async with httpx.AsyncClient() as client:
-            resp = await client.get(
-                f"{_base_url}/getFile",
-                params={"file_id": file_id},
-                timeout=15.0,
-            )
-            data = resp.json()
-            if not data.get("ok"):
-                return None
-            file_path = data["result"]["file_path"]
-            resp = await client.get(
-                f"https://api.telegram.org/file/bot{_bot_token}/{file_path}",
-                timeout=30.0,
-            )
-            if resp.status_code == 200:
-                return resp.content
+        client = await _get_client()
+        resp = await client.get(
+            f"{_base_url}/getFile",
+            params={"file_id": file_id},
+            timeout=15.0,
+        )
+        data = resp.json()
+        if not data.get("ok"):
+            logger.error(f"PHOTO DOWNLOAD FAILED | getFile response: {data}")
+            return None
+        file_path = data["result"]["file_path"]
+        file_size = data["result"].get("file_size", "?")
+        logger.info(f"PHOTO DOWNLOAD | file_path={file_path} | size={file_size}")
+        resp = await client.get(
+            f"https://api.telegram.org/file/bot{_bot_token}/{file_path}",
+            timeout=30.0,
+        )
+        if resp.status_code == 200:
+            logger.info(f"PHOTO DOWNLOAD OK | {len(resp.content)} bytes received")
+            return resp.content
+        logger.error(f"PHOTO DOWNLOAD FAILED | status={resp.status_code}")
     except Exception as e:
-        logger.error(f"Photo download error: {e}")
+        logger.error(f"PHOTO DOWNLOAD ERROR | {type(e).__name__}: {e}\n{traceback.format_exc()}")
     return None
 
 
@@ -297,9 +382,12 @@ async def _extract_and_cleanup_screenshot(photo_data: bytes) -> str:
 
 async def _handle_message(message: dict):
     chat_id = str(message["chat"]["id"])
+    from_user = message.get("from", {})
+    username = from_user.get("username", "?")
+    first_name = from_user.get("first_name", "?")
 
     if _authorized_chat_id and chat_id != _authorized_chat_id:
-        logger.warning(f"Unauthorized access attempt from chat_id={chat_id}")
+        logger.warning(f"UNAUTHORIZED | chat={chat_id} user=@{username} ({first_name}) | rejected")
         await send_telegram_message(
             chat_id,
             "🔒 *Unauthorized Access*\n\n"
@@ -312,48 +400,64 @@ async def _handle_message(message: dict):
     has_photo = "photo" in message
     lower_text = text.strip().lower()
 
-    # Log incoming message
+    # Log incoming message with details
     msg_type = "photo" if has_photo else ("command" if lower_text.startswith("/") else "text")
-    logger.info(f"Message from chat={chat_id} type={msg_type}: {text[:100]}")
+    logger.info(f"MSG RECV | chat={chat_id} | user=@{username} | type={msg_type} | text={text[:120]}")
 
+    # Command dispatch with logging
+    t_cmd = time.time()
     if lower_text == "/start":
         await _cmd_start(chat_id)
+        logger.info(f"CMD DONE | /start | {(time.time()-t_cmd)*1000:.0f}ms")
         return
     if lower_text in ("/help", "help"):
         await _cmd_help(chat_id)
+        logger.info(f"CMD DONE | /help | {(time.time()-t_cmd)*1000:.0f}ms")
         return
     if lower_text in ("/status", "status"):
         await _cmd_status(chat_id)
+        logger.info(f"CMD DONE | /status | {(time.time()-t_cmd)*1000:.0f}ms")
         return
     if lower_text == "/today":
         await _cmd_today(chat_id)
+        logger.info(f"CMD DONE | /today | {(time.time()-t_cmd)*1000:.0f}ms")
         return
     if lower_text == "/pending":
         await _cmd_pending(chat_id)
+        logger.info(f"CMD DONE | /pending | {(time.time()-t_cmd)*1000:.0f}ms")
         return
     if lower_text == "/projects":
         await _cmd_projects(chat_id)
+        logger.info(f"CMD DONE | /projects | {(time.time()-t_cmd)*1000:.0f}ms")
         return
     if lower_text == "/team":
         await _cmd_team(chat_id)
+        logger.info(f"CMD DONE | /team | {(time.time()-t_cmd)*1000:.0f}ms")
         return
     if lower_text == "/reminders":
         await _cmd_reminders(chat_id)
+        logger.info(f"CMD DONE | /reminders | {(time.time()-t_cmd)*1000:.0f}ms")
         return
     if lower_text == "/sync":
         await _cmd_sync(chat_id)
+        logger.info(f"CMD DONE | /sync | {(time.time()-t_cmd)*1000:.0f}ms")
         return
     if lower_text == "/report":
         await _cmd_report(chat_id)
+        logger.info(f"CMD DONE | /report | {(time.time()-t_cmd)*1000:.0f}ms")
         return
     if lower_text == "/week":
         await _cmd_week(chat_id)
+        logger.info(f"CMD DONE | /week | {(time.time()-t_cmd)*1000:.0f}ms")
         return
     if lower_text == "/undo":
         await _cmd_undo(chat_id)
+        logger.info(f"CMD DONE | /undo | {(time.time()-t_cmd)*1000:.0f}ms")
         return
 
+    logger.info(f"UPDATE PROC | Treating as project update text...")
     await _process_update(chat_id, message, text)
+    logger.info(f"UPDATE DONE | {(time.time()-t_cmd)*1000:.0f}ms")
 
 
 # ---------------------------------------------------------------------------
@@ -495,10 +599,10 @@ async def _auto_create_unknown_entities(parsed: dict, db, projects: list, team_m
 async def _process_update(chat_id: str, message: dict, text: str):
     # Prevent concurrent update processing from same user
     if _update_processing_lock.locked():
-        logger.info("Update processing lock busy, waiting...")
+        logger.info("UPDATE LOCK | Processing lock busy, waiting...")
     async with _update_processing_lock:
         t_start = time.time()
-        logger.info(f"Processing update from chat={chat_id}: {text[:100]}")
+        logger.info(f"UPDATE START | chat={chat_id} | text={text[:120]}")
         await send_telegram_message(chat_id, "Processing your update...")
 
         screenshot_text = ""
@@ -539,7 +643,7 @@ async def _process_update(chat_id: str, message: dict, text: str):
                 f"blockers={len(blockers)}"
             )
         except Exception as e:
-            logger.error(f"AI parsing error after {time.time() - t_start:.1f}s: {e}")
+            logger.error(f"AI PARSE ERROR | after {time.time() - t_start:.1f}s | {type(e).__name__}: {e}\n{traceback.format_exc()}")
             await send_telegram_message(
                 chat_id,
                 f"❌ *AI Parsing Error*\n\n{_safe_md(str(e)[:200])}",
@@ -910,6 +1014,7 @@ async def _cmd_sync(chat_id: str):
                 f"  *{clients}* client(s)",
             )
         except Exception as e:
+            logger.error(f"SYNC ERROR | {type(e).__name__}: {e}\n{traceback.format_exc()}")
             await send_telegram_message(
                 chat_id,
                 f"❌ *Sync Failed*\n\n{_safe_md(str(e)[:200])}",
@@ -932,7 +1037,7 @@ async def _cmd_report(chat_id: str):
         try:
             report = await generate_daily_brief(today_str())
         except Exception as e:
-            logger.error(f"Report generation error: {e}")
+            logger.error(f"REPORT ERROR | {type(e).__name__}: {e}\n{traceback.format_exc()}")
             await send_telegram_message(
                 chat_id,
                 f"❌ *Report Generation Failed*\n\n{_safe_md(str(e)[:200])}",
@@ -991,7 +1096,7 @@ async def _cmd_week(chat_id: str):
             _, week_end = week_boundaries()
             report = await generate_weekly_report(week_end)
         except Exception as e:
-            logger.error(f"Weekly report generation error: {e}")
+            logger.error(f"WEEKLY REPORT ERROR | {type(e).__name__}: {e}\n{traceback.format_exc()}")
             await send_telegram_message(
                 chat_id,
                 f"❌ *Weekly Report Failed*\n\n{_safe_md(str(e)[:200])}",

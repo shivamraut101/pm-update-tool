@@ -72,6 +72,7 @@ Once the server is running:
 
 - **[QUICKSTART.md](QUICKSTART.md)** - 5-minute setup guide
 - **[LOCAL_SETUP.md](LOCAL_SETUP.md)** - Comprehensive setup with troubleshooting
+- **[VPS_DEPLOY.md](VPS_DEPLOY.md)** - Deploy to your private VPS
 
 ## 🛠️ Tech Stack
 

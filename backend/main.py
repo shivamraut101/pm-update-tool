@@ -59,13 +59,15 @@ async def lifespan(app: FastAPI):
     yield
 
     # Shutdown
+    logger.info("Shutting down...")
     from backend.services.scheduler import stop_scheduler
-    from backend.services.telegram_bot import stop_polling, remove_webhook
+    from backend.services.telegram_bot import cleanup as telegram_cleanup, remove_webhook
     stop_scheduler()
-    stop_polling()
     if settings.app_url:
         await remove_webhook()
+    await telegram_cleanup()
     await close_db()
+    logger.info("Shutdown complete")
 
 
 app = FastAPI(

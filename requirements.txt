@@ -26,6 +26,9 @@ apscheduler==3.10.4
 pydantic-settings==2.7.1
 python-dotenv==1.0.1
 
+# Markdown to HTML
+markdown>=3.7
+
 # Utilities
 python-dateutil==2.9.0
 pytz==2024.2

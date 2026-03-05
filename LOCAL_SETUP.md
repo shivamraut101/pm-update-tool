@@ -296,14 +296,23 @@ python -m uvicorn backend.main:app --reload --port 8002
 4. Check MongoDB data in Atlas dashboard
 5. Review logs for errors
 
-### Deploying to Render
+### Deploying to VPS
 
-When ready to deploy:
+When ready to deploy to your private VPS:
 
-1. Set `APP_URL` in `.env` to your Render URL
-2. Push changes to Git
-3. Render auto-deploys
-4. Bot switches from polling to webhook mode
+1. Copy the project to your VPS
+2. Run the deploy script:
+   ```bash
+   cd deploy
+   chmod +x deploy.sh
+   sudo ./deploy.sh setup
+   ```
+3. Edit `.env` — set `APP_URL` to your domain (e.g., `https://pm.yourdomain.com`)
+4. Start the service: `sudo ./deploy.sh start`
+5. Setup SSL: `sudo ./deploy.sh ssl pm.yourdomain.com`
+6. Bot automatically switches from polling to webhook mode
+
+See [VPS_DEPLOY.md](VPS_DEPLOY.md) for full deployment guide.
 
 ## Scheduled Jobs (Local Testing)
 
@@ -364,7 +373,7 @@ D:\Personal Projects\Project Managment\
 2. Test Telegram bot integration
 3. Generate sample reports
 4. Review the code and make customizations
-5. Deploy to Render when ready
+5. Deploy to VPS when ready (see deploy/ folder)
 
 ## Support
 

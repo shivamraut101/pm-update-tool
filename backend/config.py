@@ -39,7 +39,7 @@ class Settings(BaseSettings):
     alert_cc_emails: str = ""
 
     # Deployment
-    app_url: str = "https://pm-update-tool.onrender.com"  # e.g. https://your-app.onrender.com — enables webhook mode
+    app_url: str = ""  # e.g. https://pm.yourdomain.com — set to enable webhook mode
 
     # Simple API key
     api_key: str = "change_this_to_a_random_string"

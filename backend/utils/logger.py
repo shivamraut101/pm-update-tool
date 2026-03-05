@@ -1,7 +1,7 @@
 """Centralized logging configuration for the PM Update Tool.
 
 Provides structured logging with different levels for development and production.
-All logs are sent to stdout (captured by Render logs).
+All logs are sent to stdout (captured by systemd journal / deployment logs).
 """
 import logging
 import sys
@@ -31,7 +31,7 @@ def setup_logging(level: str = "INFO"):
     for handler in root_logger.handlers[:]:
         root_logger.removeHandler(handler)
 
-    # Add console handler (stdout → Render logs)
+    # Add console handler (stdout → systemd journal / deployment logs)
     console_handler = logging.StreamHandler(sys.stdout)
     console_handler.setLevel(log_level)
     console_handler.setFormatter(formatter)
